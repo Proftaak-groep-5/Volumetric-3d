@@ -17,7 +17,7 @@ from calibration import CalibrationManager
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import List
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
