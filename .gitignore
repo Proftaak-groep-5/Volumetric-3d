@@ -54,7 +54,11 @@ frontend/build/
 # Logs
 *.log
 logs/
+Log/
 
 # OS
 Thumbs.db
 
+# project specific data
+data/
+calib_out/
