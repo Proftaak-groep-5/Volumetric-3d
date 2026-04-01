@@ -1,0 +1,3 @@
+[04/01 11:19:06.300202][info][37040][DeviceManager.cpp:25] Current found device(s): (0)
+[04/01 11:19:06.300335][info][37040][DeviceManager.cpp:339] Enable net device enumeration: true
+[04/01 11:19:08.417909][info][37040][DeviceManager.cpp:25] Current device(s) list: (0)

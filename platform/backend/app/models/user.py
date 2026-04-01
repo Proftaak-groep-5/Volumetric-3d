@@ -1,5 +1,5 @@
 from datetime import datetime
-import uuid
+import uuid 
 from sqlalchemy import String, Boolean, DateTime, Column, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, Mapped, mapped_column
