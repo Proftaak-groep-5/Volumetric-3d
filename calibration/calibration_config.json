@@ -1,0 +1,27 @@
+{
+    "output": "calib_out",
+    "dict": "DICT_4X4_50",
+    "cube": {
+        "marker_length": 0.078,
+        "cube_length": 0.09
+    },
+    "face_ids": {
+        "front": 3,
+        "top": 4,
+        "left": 5,
+        "right": 0,
+        "back": 1,
+        "bottom": 2
+    },
+    "color_res": "3840x2160",
+    "fps": 60,
+    "use_depth": true,
+    "camera": {
+        "color_auto_exposure": false,
+        "color_exposure": 120,
+        "color_gain": 0,
+        "color_auto_white_balance": true,
+        "color_white_balance": null,
+        "color_brightness": 10
+    }
+}
