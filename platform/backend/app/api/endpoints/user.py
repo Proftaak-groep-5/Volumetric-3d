@@ -1,22 +1,49 @@
-from django.db import router
 from fastapi import APIRouter, HTTPException
 from ...core.deps import DbSession
 from ...schemas.user import UserRead, UserCreate
-from ...crud import user as user_crud
+from ...services import user as user_service
 
-router = APIRouter("prefix=/users", tags=["users"])
+router = APIRouter(prefix="/users" , tags=["users"])
 
 @router.post("/register", response_model=UserRead, status_code=201)
 async def register_user(
-    user_in: UserCreate,
+        email: str,
+        username: str,
+        password: str,
+        repeated_password: str,
+        firstname: str,
+        lastname: str,
+        db: DbSession
+):
+    user = user_service.register_user(
+        db,
+        email=email,
+        username=username,
+        password=password,
+        repeated_password=repeated_password,
+        first_name=firstname,
+        last_name=lastname
+    )
+    return {"message": "Register User!"}
+
+@router.get("/{user_id}", response_model=UserRead)
+async def get_user(
+    userid: int,
     db: DbSession
 ):
-    existing_user = await user_crud.get_by_email(db, email=user_in.email)
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    user = user_service.get_user_by_id(db, userid)
 
-    user = await user_crud.create(db, obj_in=user_in)
+    return {"message": "Get User!"}
 
-    return user
+@router.get("/getByEmail", response_model=UserRead)
+async def get_user_by_email(
+    # email: str,
+    # db: DbSession
+):
+    # user = await user_crud.get_by_email(db, email=email)
+    # if not user:
+    #     raise HTTPException(status_code=404, detail="User not found")
+    # return user
+    return {"message": "Get User by Email!"}
 
 
