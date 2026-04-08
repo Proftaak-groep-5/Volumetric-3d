@@ -8,6 +8,7 @@ import numpy as np
 
 from calibration.calibration.multi_camera_calibrator import CalibrationRunResult, CameraCalibrationResult, FrameCalibrationRecord
 from calibration.config import CalibrationConfig
+from calibration.math3d.transforms import invert_transform, rotation_matrix_to_quaternion
 
 
 def _matrix_or_none(matrix: Optional[np.ndarray]) -> Optional[List[List[float]]]:
@@ -22,21 +23,71 @@ def _vector_or_none(vector: Optional[np.ndarray]) -> Optional[List[float]]:
     return np.asarray(vector, dtype=np.float64).reshape(-1).tolist()
 
 
+def _transform_or_none(transform: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if transform is None:
+        return None
+    return np.asarray(transform, dtype=np.float64)
+
+
+def _convert_transform_to_unity(transform: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    transform_arr = _transform_or_none(transform)
+    if transform_arr is None:
+        return None
+
+    # Convert from the calibration right-handed frame to Unity's left-handed frame by flipping Z.
+    flip_z = np.diag([1.0, 1.0, -1.0])
+    rotation = transform_arr[:3, :3]
+    translation = transform_arr[:3, 3]
+
+    unity_rotation = flip_z @ rotation @ flip_z
+    unity_translation = flip_z @ translation
+
+    unity_transform = np.eye(4, dtype=np.float64)
+    unity_transform[:3, :3] = unity_rotation
+    unity_transform[:3, 3] = unity_translation
+    return unity_transform
+
+
+def _unity_pose_from_world_camera_transform(t_world_camera: Optional[np.ndarray]) -> Dict[str, Any]:
+    unity_world_camera = _convert_transform_to_unity(t_world_camera)
+    if unity_world_camera is None:
+        return {
+            "T_world_camera": None,
+            "T_camera_world": None,
+            "rotation_matrix_world_camera": None,
+            "translation_world_camera": None,
+            "rotation_quaternion_xyzw_world_camera": None,
+        }
+
+    unity_rotation = unity_world_camera[:3, :3]
+    unity_translation = unity_world_camera[:3, 3]
+    unity_camera_world = invert_transform(unity_world_camera)
+    quaternion_wxyz = rotation_matrix_to_quaternion(unity_rotation)
+    quaternion_xyzw = [
+        float(quaternion_wxyz[1]),
+        float(quaternion_wxyz[2]),
+        float(quaternion_wxyz[3]),
+        float(quaternion_wxyz[0]),
+    ]
+
+    return {
+        "T_world_camera": _matrix_or_none(unity_world_camera),
+        "T_camera_world": _matrix_or_none(unity_camera_world),
+        "rotation_matrix_world_camera": _matrix_or_none(unity_rotation),
+        "translation_world_camera": _vector_or_none(unity_translation),
+        "rotation_quaternion_xyzw_world_camera": quaternion_xyzw,
+    }
+
+
 def _camera_result_to_dict(camera_result: CameraCalibrationResult) -> Dict[str, Any]:
-    t_world_camera = camera_result.t_world_camera
-    t_camera_world = camera_result.t_camera_world
+    world_matrix = camera_result.t_world_camera
+    rotation = None
+    translation = None
+    if world_matrix is not None:
+        rotation = np.asarray(world_matrix[:3, :3], dtype=np.float64)
+        translation = np.asarray(world_matrix[:3, 3], dtype=np.float64)
 
-    rotation_t_world_camera = None
-    translation_t_world_camera = None
-    if t_world_camera is not None:
-        rotation_t_world_camera = np.asarray(t_world_camera[:3, :3], dtype=np.float64)
-        translation_t_world_camera = np.asarray(t_world_camera[:3, 3], dtype=np.float64)
-
-    rotation_t_camera_world = None
-    translation_t_camera_world = None
-    if t_camera_world is not None:
-        rotation_t_camera_world = np.asarray(t_camera_world[:3, :3], dtype=np.float64)
-        translation_t_camera_world = np.asarray(t_camera_world[:3, 3], dtype=np.float64)
+    unity_pose = _unity_pose_from_world_camera_transform(world_matrix)
 
     return {
         "camera_id": camera_result.camera_id,
@@ -46,14 +97,9 @@ def _camera_result_to_dict(camera_result: CameraCalibrationResult) -> Dict[str, 
         "T_world_camera": _matrix_or_none(camera_result.t_world_camera),
         "T_camera_world": _matrix_or_none(camera_result.t_camera_world),
         "T_camera_cube": _matrix_or_none(camera_result.t_camera_cube),
-        "rotation_matrix_t_world_camera": _matrix_or_none(rotation_t_world_camera),
-        "translation_t_world_camera": _vector_or_none(translation_t_world_camera),
-        "rotation_matrix_t_camera_world": _matrix_or_none(rotation_t_camera_world),
-        "translation_t_camera_world": _vector_or_none(translation_t_camera_world),
-        # Legacy convenience aliases expected by downstream consumers.
-        # Keep these aligned with world-in-camera representation (T_camera_world).
-        "rotation_matrix_world_camera": _matrix_or_none(rotation_t_camera_world),
-        "translation_world_camera": _vector_or_none(translation_t_camera_world),
+        "rotation_matrix_world_camera": _matrix_or_none(rotation),
+        "translation_world_camera": _vector_or_none(translation),
+        "unity": unity_pose,
         "markers_used": list(camera_result.markers_used),
         "quality_metrics": {
             "frames_requested": camera_result.quality.frames_requested,
@@ -104,6 +150,11 @@ def export_calibration_results(
     final_json = {
         "timestamp_utc": run_result.timestamp_utc,
         "world_origin": config.world_origin,
+        "coordinate_system": {
+            "calibration": "right-handed (x right, y up, z forward)",
+            "unity": "left-handed (x right, y up, z forward)",
+            "unity_conversion": "flip z axis (position z *= -1, rotation R_unity = S * R * S where S=diag(1,1,-1))",
+        },
         "successful_cameras": run_result.successful_cameras,
         "failed_cameras": run_result.failed_cameras,
         "camera_count": len(run_result.camera_results),
