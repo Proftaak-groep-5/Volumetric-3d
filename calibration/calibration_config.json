@@ -6,11 +6,11 @@
         "cube_length": 0.09
     },
     "face_ids": {
-        "front": 3,
+        "front": 0,
         "top": 4,
-        "left": 5,
-        "right": 0,
-        "back": 1,
+        "left": 3,
+        "right": 1,
+        "back": 5,
         "bottom": 2
     },
     "color_res": "3840x2160",
