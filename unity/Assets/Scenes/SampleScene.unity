@@ -387,7 +387,7 @@ GameObject:
   m_Component:
   - component: {fileID: 700664836}
   - component: {fileID: 700664838}
-  - component: {fileID: 700664837}
+  - component: {fileID: 700664839}
   m_Layer: 0
   m_Name: Cam0
   m_TagString: Untagged
@@ -412,18 +412,6 @@ Transform:
   - {fileID: 330585546}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &700664837
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 700664835}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e2d8acb40cc87994582a663c4f7ea3e7, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
 --- !u!114 &700664838
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -439,6 +427,21 @@ MonoBehaviour:
   _data:
     _json: '{"declarations":{"Kind":"Object","collection":{"$content":[],"$version":"A"},"$version":"A"}}'
     _objectReferences: []
+--- !u!114 &700664839
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 700664835}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 408340aeb82712a4483f02d4b59d6c94, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  jsonRelativePath: ../calib_out/final_calibration.json
+  positionScale: 10
+  spawnCameras: 1
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -639,9 +642,12 @@ MonoBehaviour:
   m_GameObject: {fileID: 1095465109}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 0367b4f90590a7c48bb76de9b545466f, type: 3}
+  m_Script: {fileID: 11500000, guid: 408340aeb82712a4483f02d4b59d6c94, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  jsonRelativePath: ../calib_out/final_calibration.json
+  positionScale: 10
+  spawnCameras: 1
 --- !u!1 &1328685914
 GameObject:
   m_ObjectHideFlags: 0

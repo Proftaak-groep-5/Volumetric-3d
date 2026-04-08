@@ -115,6 +115,19 @@ def _camera_result_to_dict(camera_result: CameraCalibrationResult) -> Dict[str, 
         },
     }
 
+def _camera_result_to_dict_simple(camera_result: CameraCalibrationResult) -> Dict[str, Any]:
+    world_matrix = camera_result.t_world_camera
+    rotation = None
+    translation = None
+    if world_matrix is not None:
+        rotation = np.asarray(world_matrix[:3, :3], dtype=np.float64)
+        translation = np.asarray(world_matrix[:3, 3], dtype=np.float64)
+
+    unity_pose = _unity_pose_from_world_camera_transform(world_matrix)
+    return {
+        "camera_id": camera_result.camera_id,
+        "unity": unity_pose,
+    }
 
 def _frame_record_to_dict(record: FrameCalibrationRecord) -> Dict[str, Any]:
     return {
@@ -174,16 +187,21 @@ def export_calibration_results(
     }
 
     summary_path = output_dir / "final_calibration.json"
+    simple_path = output_dir / "final_calibration_simple.json"
     frames_path = output_dir / "per_frame_estimates.json"
 
     with summary_path.open("w", encoding="utf-8") as f:
         json.dump(final_json, f, indent=2)
+
+    with simple_path.open("w", encoding="utf-8") as f:
+        json.dump([_camera_result_to_dict_simple(result) for result in run_result.camera_results], f, indent=2)
 
     with frames_path.open("w", encoding="utf-8") as f:
         json.dump(per_frame_json, f, indent=2)
 
     return {
         "final_calibration": summary_path,
+        "final_calibration_simple": simple_path,
         "per_frame_estimates": frames_path,
     }
 
