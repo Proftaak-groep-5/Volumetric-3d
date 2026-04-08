@@ -23,12 +23,20 @@ def _vector_or_none(vector: Optional[np.ndarray]) -> Optional[List[float]]:
 
 
 def _camera_result_to_dict(camera_result: CameraCalibrationResult) -> Dict[str, Any]:
-    world_matrix = camera_result.t_world_camera
-    rotation = None
-    translation = None
-    if world_matrix is not None:
-        rotation = np.asarray(world_matrix[:3, :3], dtype=np.float64)
-        translation = np.asarray(world_matrix[:3, 3], dtype=np.float64)
+    t_world_camera = camera_result.t_world_camera
+    t_camera_world = camera_result.t_camera_world
+
+    rotation_t_world_camera = None
+    translation_t_world_camera = None
+    if t_world_camera is not None:
+        rotation_t_world_camera = np.asarray(t_world_camera[:3, :3], dtype=np.float64)
+        translation_t_world_camera = np.asarray(t_world_camera[:3, 3], dtype=np.float64)
+
+    rotation_t_camera_world = None
+    translation_t_camera_world = None
+    if t_camera_world is not None:
+        rotation_t_camera_world = np.asarray(t_camera_world[:3, :3], dtype=np.float64)
+        translation_t_camera_world = np.asarray(t_camera_world[:3, 3], dtype=np.float64)
 
     return {
         "camera_id": camera_result.camera_id,
@@ -38,8 +46,14 @@ def _camera_result_to_dict(camera_result: CameraCalibrationResult) -> Dict[str, 
         "T_world_camera": _matrix_or_none(camera_result.t_world_camera),
         "T_camera_world": _matrix_or_none(camera_result.t_camera_world),
         "T_camera_cube": _matrix_or_none(camera_result.t_camera_cube),
-        "rotation_matrix_world_camera": _matrix_or_none(rotation),
-        "translation_world_camera": _vector_or_none(translation),
+        "rotation_matrix_t_world_camera": _matrix_or_none(rotation_t_world_camera),
+        "translation_t_world_camera": _vector_or_none(translation_t_world_camera),
+        "rotation_matrix_t_camera_world": _matrix_or_none(rotation_t_camera_world),
+        "translation_t_camera_world": _vector_or_none(translation_t_camera_world),
+        # Legacy convenience aliases expected by downstream consumers.
+        # Keep these aligned with world-in-camera representation (T_camera_world).
+        "rotation_matrix_world_camera": _matrix_or_none(rotation_t_camera_world),
+        "translation_world_camera": _vector_or_none(translation_t_camera_world),
         "markers_used": list(camera_result.markers_used),
         "quality_metrics": {
             "frames_requested": camera_result.quality.frames_requested,
