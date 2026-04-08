@@ -1,3 +1,8 @@
 fastapi
 uvicorn
 sqlalchemy
+bcrypt
+dotenv
+asyncpg
+pydantic
+pip install 'pydantic[email]'
