@@ -6,7 +6,9 @@ import asyncio
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://testuser:VolCap3D1234!@localhost:5432/testdb")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
 
 engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 
@@ -30,7 +32,8 @@ async def init_db():
 
 # optionally expose a helper to initialize DB (call from FastAPI startup)
 def schedule_init_db():
-    asyncio.create_task(init_db())
+    task = asyncio.create_task(init_db())
+    return task
 
 #FastAPI dependency
 async def get_db():

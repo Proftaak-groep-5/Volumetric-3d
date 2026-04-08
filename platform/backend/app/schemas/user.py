@@ -15,10 +15,13 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
 
+
+class UserRegister(UserCreate):
+    repeated_password: str = Field(..., min_length=8)
+
 # Read
 class UserRead(UserBase):
-    id: int
-    uuid: uuid.UUID
+    userid: uuid.UUID
     is_active: bool
     is_verified: bool
     is_admin: bool

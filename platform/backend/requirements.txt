@@ -2,7 +2,7 @@ fastapi
 uvicorn
 sqlalchemy
 bcrypt
-dotenv
+python-dotenv
 asyncpg
 pydantic
 pydantic[email]

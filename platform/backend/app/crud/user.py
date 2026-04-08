@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timezone
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,33 +13,55 @@ async def get_by_email(db: AsyncSession, email: str) -> User | None:
     )
     return result.scalars().first()
 
-async def get_by_id(db: AsyncSession, id: int) -> User | None:
+
+async def get_by_username(db: AsyncSession, username: str) -> User | None:
     result = await db.execute(
-        select(User).where(User.userid == id)
+        select(User).where(User.username == username)
     )
     return result.scalars().first()
 
-async def createUser(db: AsyncSession, email: str, username: str, first_name: str, last_name: str) -> bytes:
+
+async def get_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
+    result = await db.execute(
+        select(User).where(User.userid == user_id)
+    )
+    return result.scalars().first()
+
+
+async def create_user(
+    db: AsyncSession,
+    email: str,
+    username: str,
+    hashed_password: str,
+    first_name: str | None,
+    last_name: str | None,
+    bio: str | None = None,
+    avatar_url: str | None = None,
+) -> User:
     new_user = User(
         email=email,
         username=username,
+        hashed_password=hashed_password,
         first_name=first_name,
         last_name=last_name,
+        bio=bio,
+        avatar_url=avatar_url,
     )
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
-    await db.execute(
-        select(User).where(User.email == email)
-    )
     return new_user
 
-async def updatePassword(db: AsyncSession, uuid: bytes, password: bytes):
+
+async def update_password(db: AsyncSession, user_id: uuid.UUID, password: str) -> User | None:
     result = await db.execute(
-        select(User).where(User.userid == uuid)
+        select(User).where(User.userid == user_id)
     )
     user = result.scalars().first()
     if user:
         user.hashed_password = password
-        user.updated_at = datetime.utcnow()
+        user.updated_at = datetime.now(timezone.utc)
         await db.commit()
+        await db.refresh(user)
+
+    return user
