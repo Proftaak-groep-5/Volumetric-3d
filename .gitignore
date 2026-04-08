@@ -62,3 +62,33 @@ Thumbs.db
 # project specific data
 data/
 calib_out/
+
+# ===== Unity =====
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+UserSettings/
+
+# Crash reports
+sysinfo.txt
+
+# Auto-generated VS files
+*.csproj
+*.unityproj
+*.sln
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+
+# Unity meta
+*.pidb.meta
+*.pdb.meta
+
+# OS
+.DS_Store
+Thumbs.db
