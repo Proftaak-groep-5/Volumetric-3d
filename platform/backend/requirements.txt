@@ -5,4 +5,4 @@ bcrypt
 dotenv
 asyncpg
 pydantic
-pip install 'pydantic[email]'
+pydantic[email]
