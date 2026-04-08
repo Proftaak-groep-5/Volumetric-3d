@@ -10,6 +10,7 @@ async def get_by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.execute(
         select(User).where(User.email == email)
     )
+    return result.scalars().first()
 
 async def get_by_id(db: AsyncSession, id: int) -> User | None:
     result = await db.execute(
