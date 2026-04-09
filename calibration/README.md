@@ -56,13 +56,13 @@ If `pyorbbecsdk` is unavailable, run in mock mode.
 ### 0) Real hardware smoke test (1 camera)
 
 ```bash
-python -m calibration.main --config kalibratie/calibration_config.json --single-camera-smoke-test --smoke-test-mode full --debug
+python -m calibration.main --config calibration/calibration_config.json --single-camera-smoke-test --smoke-test-mode full --debug
 ```
 
 Alternative direct tool entrypoint:
 
 ```bash
-python -m calibration.tools.smoke_test --config kalibratie/calibration_config.json --mode full --debug
+python -m calibration.tools.smoke_test --config calibration/calibration_config.json --mode full --debug
 ```
 
 Smoke test modes:
@@ -75,19 +75,19 @@ Smoke test modes:
 ### 1) Run with mock cameras
 
 ```bash
-python -m calibration.main --config kalibratie/calibration_config.json --mock --mock-camera-count 4
+python -m calibration.main --config calibration/calibration_config.json --mock --mock-camera-count 4
 ```
 
 ### 2) Run with real Femto Bolt cameras
 
 ```bash
-python -m calibration.main --config kalibratie/calibration_config.json
+python -m calibration.main --config calibration/calibration_config.json
 ```
 
 ### 3) Run with debug overlays
 
 ```bash
-python -m calibration.main --config kalibratie/calibration_config.json --debug
+python -m calibration.main --config calibration/calibration_config.json --debug
 ```
 
 Useful CLI flags:
