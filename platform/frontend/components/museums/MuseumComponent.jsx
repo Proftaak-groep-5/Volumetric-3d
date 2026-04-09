@@ -1,15 +1,15 @@
 //Component to display all museums in the database included with a search engine.
-import React, { useState, useEffect } from 'react';
-import { getAllMuseums } from '../../services/museumService';
-import MuseumCard from './MuseumCard';
+'use client';
 
-const MuseumComponent = () => {
+import React, { useState, useEffect } from 'react';
+
+export default function MuseumComponent() {
   const [museums, setMuseums] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     const fetchMuseums = async () => {
-      const data = await getAllMuseums();
+      const data = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/museums/getAll`).then(res => res.json());
       setMuseums(data);
     };
     fetchMuseums();
@@ -29,9 +29,7 @@ const MuseumComponent = () => {
         onChange={(e) => setSearchTerm(e.target.value)}
       />
       <div className="museum-list">
-        {filteredMuseums.map(museum => (
-          <MuseumCard key={museum.id} museum={museum} />
-        ))}
+        Something
       </div>
     </div>
   );
