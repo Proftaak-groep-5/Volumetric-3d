@@ -1,15 +1,29 @@
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, EmailStr, Field, ConfigDict
 import uuid
 
 # Base
 class UserBase(BaseModel):
     email: EmailStr
     username: str = Field(..., max_length=255)
-    first_name: str | None = Field(None, max_length=255)
-    last_name: str | None = Field(None, max_length=255)
+    first_name: str | None = Field(
+        None,
+        max_length=255,
+        validation_alias=AliasChoices("first_name", "firstname", "firstName"),
+    )
+    last_name: str | None = Field(
+        None,
+        max_length=255,
+        validation_alias=AliasChoices("last_name", "lastname", "lastName"),
+    )
     bio: str | None = None
-    avatar_url: str | None = Field(None, max_length=255)
+    avatar_url: str | None = Field(
+        None,
+        max_length=255,
+        validation_alias=AliasChoices("avatar_url", "avatarUrl"),
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
 
 # Create / Register
 class UserCreate(UserBase):
@@ -17,7 +31,11 @@ class UserCreate(UserBase):
 
 
 class UserRegister(UserCreate):
-    repeated_password: str = Field(..., min_length=8)
+    repeated_password: str = Field(
+        ...,
+        min_length=8,
+        validation_alias=AliasChoices("repeated_password", "repeatedPassword"),
+    )
 
 # Read
 class UserRead(UserBase):
