@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, UUID, ForeignKey
 from sqlalchemy.orm import relationship
+from sqlalchemy.testing.schema import mapped_column
 
 from ..core.database import Base
 
@@ -12,6 +13,6 @@ class Recording(Base):
     description = Column(String)
     file_url = Column(String)
     museumid = Column(UUID, ForeignKey("museumdto.museumid"))
-    owner = Column(UUID, index=True, foreign_key="userdata.userid")
+    owner = Column(UUID, ForeignKey("userdata.userid"), index=True)
 
     museum = relationship("Museum", back_populates="recordings")

@@ -29,7 +29,7 @@ async def register_user(
             first_name=payload.first_name,
             last_name=payload.last_name,
             bio=payload.bio,
-            avatar_url=payload.avatar_url,
+            avatar_url=payload.avatar_url
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

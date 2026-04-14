@@ -3,7 +3,7 @@ import uuid
 
 from .. import db
 from sqlalchemy import Column, String, Integer, ForeignKey, UUID
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy.orm import relationship, Mapped, mapped_column, foreign
 from ..core.database import Base
 
 class Museum(Base):
@@ -15,6 +15,6 @@ class Museum(Base):
         default=uuid.uuid4
     )
     name = Column(String, unique=True, index=True)
-    owner = Column(UUID, index=True, foreign_key="userdata.userid")
+    owner = mapped_column(UUID, ForeignKey("userdata.userid"), index=True)
     recordings = relationship("Recording", back_populates="museum")
     description = Column(String)
