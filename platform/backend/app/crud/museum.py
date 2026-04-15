@@ -20,10 +20,10 @@ async def search_museums(db: AsyncSession, query: str):
     )
     return result.scalars().all()
 
-async def create_museum(db: AsyncSession, name: str, description: str, location: str, image_url: str | None = None):
+async def create_museum(db: AsyncSession, name: str, description: str, image_url: str | None = None):
     new_museum = Museum(
         name=name,
-        owner= None,  # Set owner to None for now, can be updated later
+        owner= None,  # Set owner to None, implement logged in user here
         recordings= [],  # Initialize with an empty list of recordings
         description=description,
     )

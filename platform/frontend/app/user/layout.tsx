@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function UserLayout({ children }: { readonly children: ReactNode }) {
-    return <div className="min-h-screen bg-gray-950">{children}</div>;
+    return <div className="min-h-screen">{children}</div>;
 }
