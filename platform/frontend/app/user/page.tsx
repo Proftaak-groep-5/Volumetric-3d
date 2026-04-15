@@ -7,8 +7,8 @@ interface RegisterForm {
     username: string;
     password: string;
     repeatedPassword: string;
-    firstname: string;
-    lastname: string;
+    first_name: string;
+    last_name: string;
     bio: string;
     avatarUrl: string;
 }
@@ -19,8 +19,8 @@ export default function TemporaryRegisterPage() {
         username: '',
         password: '',
         repeatedPassword: '',
-        firstname: '',
-        lastname: '',
+        first_name: '',
+        last_name: '',
         bio: '',
         avatarUrl: '',
     });
@@ -43,7 +43,7 @@ export default function TemporaryRegisterPage() {
             setLoading(false);
             return;
         }
-        console.log(process.env.NEXT_PUBLIC_API_BASE_URL)
+        console.log(formData)
         try {
             const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/users/register`, {
                 method: 'POST',
@@ -59,7 +59,7 @@ export default function TemporaryRegisterPage() {
                 // Formulier resetten
                 setFormData({
                     email: '', username: '', password: '', repeatedPassword: '',
-                    firstname: '', lastname: '', bio: '', avatarUrl: ''
+                    first_name: '', last_name: '', bio: '', avatarUrl: ''
                 });
             } else {
                 setMessage({ type: 'error', text: data.message || 'Something went wrong' });
@@ -75,7 +75,7 @@ export default function TemporaryRegisterPage() {
         <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
             <div className="w-full max-w-lg bg-gray-900 rounded-2xl shadow-2xl p-8 border border-gray-800">
                 <div className="text-center mb-8">
-                    <h1 className="text-3xl font-bold text-black mb-2">Temporary Register</h1>
+                    <h1 className="text-3xl font-bold text-white mb-2">Temporary Register</h1>
                     <p className="text-gray-400">Snel users toevoegen aan de database</p>
                 </div>
 
@@ -134,8 +134,8 @@ export default function TemporaryRegisterPage() {
                             <label className="block text-sm text-gray-400 mb-1">First Name</label>
                             <input
                                 type="text"
-                                name="firstname"
-                                value={formData.firstname}
+                                name="first_name"
+                                value={formData.first_name}
                                 onChange={handleChange}
                                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
                             />
@@ -144,8 +144,8 @@ export default function TemporaryRegisterPage() {
                             <label className="block text-sm text-gray-400 mb-1">Last Name</label>
                             <input
                                 type="text"
-                                name="lastname"
-                                value={formData.lastname}
+                                name="last_name"
+                                value={formData.last_name}
                                 onChange={handleChange}
                                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
                             />

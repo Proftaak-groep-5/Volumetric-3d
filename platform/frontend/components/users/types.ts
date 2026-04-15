@@ -3,8 +3,8 @@ export default interface User {
     username: string,
     password: string,
     repeatedPassword: string,
-    firstname: string,
-    lastname: string,
+    first_name: string,
+    last_name: string,
     bio: string,
     avatarUrl: string
 }

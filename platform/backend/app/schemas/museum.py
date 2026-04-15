@@ -1,9 +1,15 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 
 
 #Base
 class MuseumBase(BaseModel):
     name: str = Field(..., max_length=255)
+    description: str = Field(...)
+    image_Url:str | None = Field(
+        None,
+        max_length=255,
+        validation_alia=AliasChoices("image_Url", "imageUrl"),
+    )
 
 #Create
 class MuseumCreate(MuseumBase):
