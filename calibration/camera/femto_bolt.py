@@ -345,12 +345,12 @@ class FemtoBoltCamera(CameraDevice):
             raise RuntimeError("OBFormat enum unavailable")
 
         candidates = [
-            (1024, 1024, OBFormat.Y16, 30),
-            (1024, 1024, OBFormat.Y16, 15),
-            (640, 400, OBFormat.Y16, 30),
-            (640, 400, OBFormat.Y16, 15),
+            #(1024, 1024, OBFormat.Y16, 30),
+            #(1024, 1024, OBFormat.Y16, 15),
+            (640, 576, OBFormat.Y16, 30),
+            (640, 576, OBFormat.Y16, 15),
             (512, 512, OBFormat.Y16, 30),
-            (512, 512, OBFormat.Y16, 15),
+            (320, 288, OBFormat.Y16, 30),
         ]
 
         for width, height, fmt, fps in candidates:

@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     backend_port: int = 8000
     recordings_path: Path = Path("./recordings")
     max_cameras: int = 4
-    depth_width: int = 1024
-    depth_height: int = 1024
+    depth_width: int = 640
+    depth_height: int = 576
     color_width: int = 1920
     color_height: int = 1080
     fps: int = 30
