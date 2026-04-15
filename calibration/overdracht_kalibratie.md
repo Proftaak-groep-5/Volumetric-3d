@@ -171,16 +171,3 @@ Voorbeeld JSON:
 | Geen markers gevonden | Slechte belichting | Verbeter het licht |
 | Rare projectie in Unity | Verkeerde matrix of as-conventie | Controleer `calibration_config.json` en importlogica |
 
-## Verbeteringen En Roadmap
-
-- Automatische kwaliteitscheck op calibratieresultaten.
-- Duidelijkere foutmeldingen bij markerdetectie.
-- Extra validatiescripts voor export/import tussen Python en Unity.
-
-## Overdracht En Contact
-
-Bij overdracht naar een nieuw team:
-
-- Lever de laatste `calib_out/final_calibration.json` mee.
-- Leg vast welke cube is gebruikt (afmetingen en face-id mapping).
-- Documenteer gebruikte cameramodellen en opname-opstelling.
