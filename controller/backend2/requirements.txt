@@ -1,0 +1,9 @@
+fastapi==0.135.2
+uvicorn==0.42.0
+pydantic==2.12.5
+pydantic-settings==2.13.1
+numpy==2.4.4
+opencv-python==4.13.0.92
+pyorbbecsdk2==2.0.18
+SQLAlchemy==2.0.48
+python-dotenv==1.2.2
