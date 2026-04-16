@@ -18,18 +18,18 @@ StateDep = Annotated[BackendAppState, Depends(get_app_state)]
 
 DESC_FIRST_CAMERA_ID = "First camera ID"
 DESC_SECOND_CAMERA_ID = "Second camera ID"
-DESC_CHECKERBOARD_COLS = "Number of inner corners (columns)"
-DESC_CHECKERBOARD_ROWS = "Number of inner corners (rows)"
-DESC_SQUARE_SIZE = "Square size in meters"
+DESC_CHECKERBOARD_COLS = "Legacy checkerboard columns (ignored in external calibration mode)"
+DESC_CHECKERBOARD_ROWS = "Legacy checkerboard rows (ignored in external calibration mode)"
+DESC_SQUARE_SIZE = "Legacy checkerboard square size in meters (ignored in external calibration mode)"
 
 FRAME_NOT_AVAILABLE = "Frame not available"
 COLOR_DATA_NOT_AVAILABLE = "Color data not available"
 
 CameraId1Query = Annotated[str, Query(..., description=DESC_FIRST_CAMERA_ID)]
 CameraId2Query = Annotated[str, Query(..., description=DESC_SECOND_CAMERA_ID)]
-CheckerboardColsQuery = Annotated[int, Query(8, description=DESC_CHECKERBOARD_COLS)]
-CheckerboardRowsQuery = Annotated[int, Query(5, description=DESC_CHECKERBOARD_ROWS)]
-SquareSizeQuery = Annotated[float, Query(0.025, description=DESC_SQUARE_SIZE)]
+CheckerboardColsQuery = Annotated[int, Query(description=DESC_CHECKERBOARD_COLS)]
+CheckerboardRowsQuery = Annotated[int, Query(description=DESC_CHECKERBOARD_ROWS)]
+SquareSizeQuery = Annotated[float, Query(description=DESC_SQUARE_SIZE)]
 
 RESPONSE_400 = {"description": "Bad Request"}
 RESPONSE_404 = {"description": "Not Found"}
@@ -139,9 +139,9 @@ async def get_stereo_calibration(
 async def capture_calibration_image(
     camera_id_1: CameraId1Query,
     camera_id_2: CameraId2Query,
-    checkerboard_cols: CheckerboardColsQuery,
-    checkerboard_rows: CheckerboardRowsQuery,
     state: StateDep,
+    checkerboard_cols: CheckerboardColsQuery = 8,
+    checkerboard_rows: CheckerboardRowsQuery = 5,
 ) -> dict:
     _ = checkerboard_cols
     _ = checkerboard_rows
@@ -238,11 +238,13 @@ async def get_debug_image(camera_id: str, state: StateDep) -> dict:
 async def check_checkerboard(
     camera_id_1: CameraId1Query,
     camera_id_2: CameraId2Query,
-    checkerboard_cols: CheckerboardColsQuery,
-    checkerboard_rows: CheckerboardRowsQuery,
     state: StateDep,
+    checkerboard_cols: CheckerboardColsQuery = 8,
+    checkerboard_rows: CheckerboardRowsQuery = 5,
 ) -> dict:
-    pattern = f"{checkerboard_cols}x{checkerboard_rows}"
+    _ = checkerboard_cols
+    _ = checkerboard_rows
+    pattern = "external-aruco-cube"
 
     if not state.camera_service.has_camera(camera_id_1):
         return {
@@ -309,8 +311,14 @@ async def check_checkerboard(
         }
 
     return {
-        "camera_1": {"detected": True, "reason": None},
-        "camera_2": {"detected": True, "reason": None},
+        "camera_1": {
+            "detected": True,
+            "reason": "Checkerboard detection skipped: backend2 uses external ArUco cube calibration file",
+        },
+        "camera_2": {
+            "detected": True,
+            "reason": "Checkerboard detection skipped: backend2 uses external ArUco cube calibration file",
+        },
         "both_detected": True,
         "pattern_tested": pattern,
     }
@@ -320,10 +328,10 @@ async def check_checkerboard(
 async def perform_stereo_calibration(
     camera_id_1: CameraId1Query,
     camera_id_2: CameraId2Query,
-    checkerboard_cols: CheckerboardColsQuery,
-    checkerboard_rows: CheckerboardRowsQuery,
-    square_size: SquareSizeQuery,
     state: StateDep,
+    checkerboard_cols: CheckerboardColsQuery = 8,
+    checkerboard_rows: CheckerboardRowsQuery = 5,
+    square_size: SquareSizeQuery = 0.025,
 ) -> dict:
     _ = checkerboard_cols
     _ = checkerboard_rows
@@ -348,6 +356,7 @@ async def perform_stereo_calibration(
             "reprojection_error": None,
             "translation": translation,
             "images_used": state.capture_compat_service.capture_count,
+            "calibration_source": "external_aruco_cube_file",
         }
     except Exception as exc:
         logger.exception("External calibration load failed")

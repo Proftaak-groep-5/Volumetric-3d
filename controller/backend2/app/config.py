@@ -6,6 +6,9 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
 class Settings(BaseSettings):
     """Runtime configuration loaded from env vars and .env."""
 
@@ -16,7 +19,7 @@ class Settings(BaseSettings):
 
     recordings_path: Path = Path("./recordings")
     calibration_capture_path: Path = Path("./calibration_images")
-    external_calibration_path: Path = Path("../../calib_out/final_calibration.json")
+    external_calibration_path: Path = REPO_ROOT / "calib_out" / "final_calibration.json"
 
     max_cameras: int = Field(default=6, ge=1, le=6)
     depth_width: int = 640
