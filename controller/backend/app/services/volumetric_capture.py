@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from app.services.calibration_store import CalibrationStore
+from app.services.camera_stream_manager import CameraStreamManager, RawFrameSnapshot
+
+
+@dataclass
+class CaptureResult:
+    file_path: Path
+    preview_image_path: Path
+    file_name: str
+    preview_image_name: str
+    points_total: int
+    points_per_camera: dict[str, int]
+    cameras_used: list[str]
+
+
+class VolumetricCaptureService:
+    def __init__(
+        self,
+        camera_manager: CameraStreamManager,
+        calibration_store: CalibrationStore,
+        output_dir: Path,
+        depth_scale_m: float = 0.001,
+        depth_min_m: float = 0.2,
+        depth_max_m: float = 5.0,
+        pixel_step: int = 4,
+    ) -> None:
+        self._camera_manager = camera_manager
+        self._calibration_store = calibration_store
+        self._output_dir = output_dir
+        self._depth_scale_m = float(depth_scale_m)
+        self._depth_min_m = float(depth_min_m)
+        self._depth_max_m = float(depth_max_m)
+        self._pixel_step = max(1, int(pixel_step))
+
+    def capture_once(
+        self,
+        camera_ids: list[str] | None = None,
+        pixel_step: int | None = None,
+        depth_min_m: float | None = None,
+        depth_max_m: float | None = None,
+    ) -> CaptureResult:
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+
+        selected_camera_ids = camera_ids or self._camera_manager.camera_ids()
+        pixel_step_value = max(1, int(pixel_step if pixel_step is not None else self._pixel_step))
+        depth_min_value = float(self._depth_min_m if depth_min_m is None else depth_min_m)
+        depth_max_value = float(self._depth_max_m if depth_max_m is None else depth_max_m)
+        all_points_world: list[np.ndarray] = []
+        all_colors: list[np.ndarray] = []
+        points_per_camera: dict[str, int] = {}
+        cameras_used: list[str] = []
+        stats = {
+            "no_calibration": 0,
+            "no_depth_frame": 0,
+            "no_intrinsics": 0,
+            "no_points_after_filter": 0,
+        }
+
+        for camera_id in selected_camera_ids:
+            world_points, colors = self._capture_world_points_for_camera(
+                camera_id,
+                pixel_step=pixel_step_value,
+                depth_min_m=depth_min_value,
+                depth_max_m=depth_max_value,
+                stats=stats,
+            )
+            if world_points is None or colors is None:
+                continue
+
+            all_points_world.append(world_points)
+            all_colors.append(colors)
+            points_per_camera[camera_id] = int(world_points.shape[0])
+            cameras_used.append(camera_id)
+
+        if not all_points_world:
+            raise ValueError(self._build_empty_capture_message(selected_camera_ids, stats))
+
+        stacked_points = np.vstack(all_points_world)
+        stacked_colors = np.vstack(all_colors)
+
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        ply_path = self._output_dir / f"volumetric_capture_{timestamp}.ply"
+        preview_path = self._output_dir / f"volumetric_capture_{timestamp}_preview.png"
+
+        self._write_ply(ply_path, stacked_points, stacked_colors)
+        self._write_preview(preview_path, stacked_points)
+
+        return CaptureResult(
+            file_path=ply_path,
+            preview_image_path=preview_path,
+            file_name=ply_path.name,
+            preview_image_name=preview_path.name,
+            points_total=int(stacked_points.shape[0]),
+            points_per_camera=points_per_camera,
+            cameras_used=sorted(cameras_used),
+        )
+
+    def _capture_world_points_for_camera(
+        self,
+        camera_id: str,
+        *,
+        pixel_step: int,
+        depth_min_m: float,
+        depth_max_m: float,
+        stats: dict[str, int],
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        extrinsics = self._calibration_store.get(camera_id)
+        if extrinsics is None:
+            stats["no_calibration"] += 1
+            return None, None
+
+        frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
+        if frame is None:
+            frame = self._camera_manager.capture_raw_frame(
+                camera_id,
+                require_depth=True,
+                timeout_ms=600,
+                max_attempts=12,
+            )
+        if frame is None or frame.depth is None:
+            stats["no_depth_frame"] += 1
+            return None, None
+
+        intrinsics = self._depth_intrinsics_for_frame(camera_id, frame)
+        if intrinsics is None:
+            stats["no_intrinsics"] += 1
+            return None, None
+
+        camera_points, colors = self._depth_to_camera_points(
+            frame,
+            intrinsics,
+            pixel_step=pixel_step,
+            depth_min_m=depth_min_m,
+            depth_max_m=depth_max_m,
+        )
+        if camera_points.size == 0:
+            stats["no_points_after_filter"] += 1
+            return None, None
+
+        world_points = self._camera_to_world(camera_points, extrinsics.t_camera_world)
+        return world_points, colors
+
+    @staticmethod
+    def _build_empty_capture_message(selected_camera_ids: list[str], stats: dict[str, int]) -> str:
+        return (
+            "No depth points captured. "
+            f"selected={len(selected_camera_ids)} "
+            f"no_calibration={stats['no_calibration']} "
+            f"no_depth_frame={stats['no_depth_frame']} "
+            f"no_intrinsics={stats['no_intrinsics']} "
+            f"no_points_after_filter={stats['no_points_after_filter']}. "
+            "Ensure CAMERA_USE_DEPTH=true and tune depth_min_m/depth_max_m if needed."
+        )
+
+    def _depth_intrinsics_for_frame(self, camera_id: str, frame: RawFrameSnapshot) -> np.ndarray | None:
+        intrinsics = self._camera_manager.intrinsics(camera_id)
+        if intrinsics is None or frame.depth is None:
+            return None
+
+        depth_height, depth_width = frame.depth.shape[:2]
+        k = np.asarray(intrinsics, dtype=np.float64).copy()
+
+        current_width = float(max(1.0, 2.0 * k[0, 2]))
+        current_height = float(max(1.0, 2.0 * k[1, 2]))
+        scale_x = float(depth_width) / current_width
+        scale_y = float(depth_height) / current_height
+
+        k[0, 0] *= scale_x
+        k[1, 1] *= scale_y
+        k[0, 2] *= scale_x
+        k[1, 2] *= scale_y
+        return k
+
+    def _depth_to_camera_points(
+        self,
+        frame: RawFrameSnapshot,
+        intrinsics: np.ndarray,
+        *,
+        pixel_step: int,
+        depth_min_m: float,
+        depth_max_m: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        depth = np.asarray(frame.depth, dtype=np.uint16)
+        if depth.size == 0:
+            return np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.uint8)
+
+        sampled = depth[:: pixel_step, :: pixel_step]
+        valid = sampled > 0
+        if not np.any(valid):
+            return np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.uint8)
+
+        z = sampled.astype(np.float64) * self._depth_scale_m
+        valid &= z >= depth_min_m
+        valid &= z <= depth_max_m
+        if not np.any(valid):
+            return np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.uint8)
+
+        rows, cols = np.nonzero(valid)
+        cols = cols.astype(np.float64)
+        rows = rows.astype(np.float64)
+        z_values = z[valid]
+
+        fx = float(intrinsics[0, 0])
+        fy = float(intrinsics[1, 1])
+        cx = float(intrinsics[0, 2]) / float(pixel_step)
+        cy = float(intrinsics[1, 2]) / float(pixel_step)
+
+        x_values = (cols - cx) * z_values / fx * float(pixel_step)
+        y_values = (rows - cy) * z_values / fy * float(pixel_step)
+
+        points = np.column_stack([x_values, y_values, z_values]).astype(np.float64)
+        colors = self._sample_colors(frame, valid, pixel_step=pixel_step)
+        return points, colors
+
+    def _sample_colors(self, frame: RawFrameSnapshot, valid_mask: np.ndarray, *, pixel_step: int) -> np.ndarray:
+        if frame.color is None:
+            return np.full((int(np.count_nonzero(valid_mask)), 3), 180, dtype=np.uint8)
+
+        target_height, target_width = valid_mask.shape
+        color = frame.color[:: pixel_step, :: pixel_step]
+        if color.shape[0] != target_height or color.shape[1] != target_width:
+            color = cv2.resize(color, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
+
+        if color.ndim != 3 or color.shape[2] != 3:
+            return np.full((int(np.count_nonzero(valid_mask)), 3), 180, dtype=np.uint8)
+
+        sampled = color[valid_mask]
+        return sampled.astype(np.uint8)
+
+    @staticmethod
+    def _camera_to_world(camera_points: np.ndarray, t_camera_world: np.ndarray) -> np.ndarray:
+        t_world_camera = np.linalg.inv(np.asarray(t_camera_world, dtype=np.float64))
+        rotation = t_world_camera[:3, :3]
+        translation = t_world_camera[:3, 3]
+        return (camera_points @ rotation.T) + translation
+
+    @staticmethod
+    def _write_ply(path: Path, points: np.ndarray, colors: np.ndarray) -> None:
+        with path.open("w", encoding="utf-8") as handle:
+            handle.write("ply\n")
+            handle.write("format ascii 1.0\n")
+            handle.write(f"element vertex {points.shape[0]}\n")
+            handle.write("property float x\n")
+            handle.write("property float y\n")
+            handle.write("property float z\n")
+            handle.write("property uchar red\n")
+            handle.write("property uchar green\n")
+            handle.write("property uchar blue\n")
+            handle.write("end_header\n")
+            for idx in range(points.shape[0]):
+                x, y, z = points[idx]
+                b, g, r = colors[idx]
+                handle.write(f"{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n")
+
+    @staticmethod
+    def _write_preview(path: Path, points: np.ndarray) -> None:
+        width = 900
+        height = 900
+        padding = 40
+
+        canvas = np.full((height, width, 3), 18, dtype=np.uint8)
+        xy = points[:, :2]
+
+        mins = xy.min(axis=0)
+        maxs = xy.max(axis=0)
+        span = np.maximum(maxs - mins, 1e-6)
+
+        normalized = (xy - mins) / span
+        px = (padding + normalized[:, 0] * (width - 2 * padding)).astype(np.int32)
+        py = (padding + normalized[:, 1] * (height - 2 * padding)).astype(np.int32)
+        py = height - py
+
+        for x_coord, y_coord in zip(px, py, strict=False):
+            cv2.circle(canvas, (int(x_coord), int(y_coord)), 1, (80, 235, 140), thickness=-1)
+
+        cv2.imwrite(str(path), canvas)

@@ -345,8 +345,6 @@ class FemtoBoltCamera(CameraDevice):
             raise RuntimeError("OBFormat enum unavailable")
 
         candidates = [
-            #(1024, 1024, OBFormat.Y16, 30),
-            #(1024, 1024, OBFormat.Y16, 15),
             (640, 576, OBFormat.Y16, 30),
             (640, 576, OBFormat.Y16, 15),
             (512, 512, OBFormat.Y16, 30),
@@ -663,8 +661,11 @@ class FemtoBoltCamera(CameraDevice):
         except Exception:
             return None
 
-        if depth.size != width * height:
+        expected_size = width * height
+        if depth.size < expected_size:
             return None
+        if depth.size > expected_size:
+            depth = depth[:expected_size]
         return depth.reshape(height, width)
 
 
