@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .core.database import init_db
 from .api.endpoints.user import router as user_router
 from .api.endpoints.museums import router as museum_router
+from .api.endpoints.recording import router as recording_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -15,6 +16,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(user_router)
 app.include_router(museum_router)
+app.include_router(recording_router)
 
 
 allowed_origins_env = os.getenv("CORS_ALLOWED_ORIGINS")

@@ -1,3 +1,5 @@
+import uuid
+
 from pydantic import BaseModel, Field, AliasChoices
 
 
@@ -17,7 +19,7 @@ class MuseumCreate(MuseumBase):
 
 #Read
 class MuseumRead(MuseumBase):
-    museumid: int
+    museumid: uuid.UUID
 
     class Config:
         orm_mode = True

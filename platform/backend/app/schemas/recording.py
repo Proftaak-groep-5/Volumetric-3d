@@ -9,12 +9,12 @@ class RecordingBase(BaseModel):
 
 #Create
 class RecordingCreate(RecordingBase):
-    pass
+    museumid: str
 
 #Read
 class RecordingRead(RecordingBase):
-    recordingid: int
-    museumid: int
+    recordingid: str
+    museumid: str
 
     class Config:
         orm_mode = True
