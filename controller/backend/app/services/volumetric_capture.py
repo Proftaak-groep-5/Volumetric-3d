@@ -135,18 +135,23 @@ class VolumetricCaptureService:
             stats["no_intrinsics"] += 1
             return None, None
 
-        camera_points, colors = self._depth_to_camera_points(
+        color_intrinsics = self._camera_manager.intrinsics(camera_id)
+        depth_to_color = self._camera_manager.depth_to_color_transform(camera_id)
+
+        depth_points = self._depth_to_camera_points(
             frame,
             intrinsics,
             pixel_step=pixel_step,
             depth_min_m=depth_min_m,
             depth_max_m=depth_max_m,
         )
-        if camera_points.size == 0:
+        if depth_points.size == 0:
             stats["no_points_after_filter"] += 1
             return None, None
 
-        world_points = self._camera_to_world(camera_points, extrinsics.t_camera_world)
+        color_camera_points = self._depth_camera_to_color_camera(depth_points, depth_to_color)
+        colors = self._sample_colors_from_projection(frame, color_camera_points, color_intrinsics)
+        world_points = self._camera_to_world(color_camera_points, extrinsics.t_camera_world)
         return world_points, colors
 
     @staticmethod
@@ -195,21 +200,21 @@ class VolumetricCaptureService:
         pixel_step: int,
         depth_min_m: float,
         depth_max_m: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> np.ndarray:
         depth = np.asarray(frame.depth, dtype=np.uint16)
         if depth.size == 0:
-            return np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.uint8)
+            return np.empty((0, 3), dtype=np.float64)
 
         sampled = depth[:: pixel_step, :: pixel_step]
         valid = sampled > 0
         if not np.any(valid):
-            return np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.uint8)
+            return np.empty((0, 3), dtype=np.float64)
 
         z = sampled.astype(np.float64) * self._depth_scale_m
         valid &= z >= depth_min_m
         valid &= z <= depth_max_m
         if not np.any(valid):
-            return np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.uint8)
+            return np.empty((0, 3), dtype=np.float64)
 
         rows, cols = np.nonzero(valid)
         cols = cols.astype(np.float64)
@@ -225,23 +230,63 @@ class VolumetricCaptureService:
         y_values = (rows - cy) * z_values / fy * float(pixel_step)
 
         points = np.column_stack([x_values, y_values, z_values]).astype(np.float64)
-        colors = self._sample_colors(frame, valid, pixel_step=pixel_step)
-        return points, colors
+        return points
 
-    def _sample_colors(self, frame: RawFrameSnapshot, valid_mask: np.ndarray, *, pixel_step: int) -> np.ndarray:
+    def _sample_colors_from_projection(
+        self,
+        frame: RawFrameSnapshot,
+        color_camera_points: np.ndarray,
+        intrinsics: np.ndarray | None,
+    ) -> np.ndarray:
+        point_count = int(color_camera_points.shape[0])
+        if point_count <= 0:
+            return np.empty((0, 3), dtype=np.uint8)
         if frame.color is None:
-            return np.full((int(np.count_nonzero(valid_mask)), 3), 180, dtype=np.uint8)
+            return np.full((point_count, 3), 180, dtype=np.uint8)
+        if intrinsics is None:
+            return np.full((point_count, 3), 180, dtype=np.uint8)
 
-        target_height, target_width = valid_mask.shape
-        color = frame.color[:: pixel_step, :: pixel_step]
-        if color.shape[0] != target_height or color.shape[1] != target_width:
-            color = cv2.resize(color, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
-
+        color = frame.color
         if color.ndim != 3 or color.shape[2] != 3:
-            return np.full((int(np.count_nonzero(valid_mask)), 3), 180, dtype=np.uint8)
+            return np.full((point_count, 3), 180, dtype=np.uint8)
 
-        sampled = color[valid_mask]
-        return sampled.astype(np.uint8)
+        fx = float(intrinsics[0, 0])
+        fy = float(intrinsics[1, 1])
+        cx = float(intrinsics[0, 2])
+        cy = float(intrinsics[1, 2])
+
+        x = color_camera_points[:, 0]
+        y = color_camera_points[:, 1]
+        z = color_camera_points[:, 2]
+
+        colors = np.full((point_count, 3), 180, dtype=np.uint8)
+        valid_z = z > 1e-6
+        if not np.any(valid_z):
+            return colors
+
+        u = np.round((x[valid_z] * fx / z[valid_z]) + cx).astype(np.int32)
+        v = np.round((y[valid_z] * fy / z[valid_z]) + cy).astype(np.int32)
+
+        in_bounds = (u >= 0) & (u < color.shape[1]) & (v >= 0) & (v < color.shape[0])
+        if np.any(in_bounds):
+            valid_indices = np.nonzero(valid_z)[0]
+            point_indices = valid_indices[in_bounds]
+            colors[point_indices] = color[v[in_bounds], u[in_bounds]].astype(np.uint8)
+
+        return colors
+
+    @staticmethod
+    def _depth_camera_to_color_camera(depth_points: np.ndarray, depth_to_color: np.ndarray | None) -> np.ndarray:
+        if depth_to_color is None:
+            return depth_points
+
+        transform = np.asarray(depth_to_color, dtype=np.float64)
+        if transform.shape != (4, 4):
+            return depth_points
+
+        rotation = transform[:3, :3]
+        translation = transform[:3, 3]
+        return (depth_points @ rotation.T) + translation
 
     @staticmethod
     def _camera_to_world(camera_points: np.ndarray, t_camera_world: np.ndarray) -> np.ndarray:

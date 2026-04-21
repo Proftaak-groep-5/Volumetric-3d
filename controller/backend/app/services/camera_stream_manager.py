@@ -55,6 +55,7 @@ class CameraStreamManager:
         self._raw_snapshots: dict[str, RawFrameSnapshot] = {}
         self._intrinsics: dict[str, np.ndarray] = {}
         self._depth_intrinsics: dict[str, np.ndarray] = {}
+        self._depth_to_color: dict[str, np.ndarray] = {}
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -82,6 +83,9 @@ class CameraStreamManager:
             depth_intrinsics = camera.get_depth_intrinsics()
             if depth_intrinsics is not None:
                 self._depth_intrinsics[camera.camera_id] = np.asarray(depth_intrinsics.camera_matrix, dtype=np.float64)
+            depth_to_color = camera.get_depth_to_color_transform()
+            if depth_to_color is not None:
+                self._depth_to_color[camera.camera_id] = np.asarray(depth_to_color, dtype=np.float64)
             self._snapshots[camera.camera_id] = CameraSnapshot(
                 jpeg=None,
                 frame_index=0,
@@ -196,6 +200,10 @@ class CameraStreamManager:
 
     def depth_intrinsics(self, camera_id: str) -> np.ndarray | None:
         return self._depth_intrinsics.get(camera_id)
+
+    def depth_to_color_transform(self, camera_id: str) -> np.ndarray | None:
+        transform = self._depth_to_color.get(camera_id)
+        return None if transform is None else transform.copy()
 
     def get_snapshot(self, camera_id: str) -> CameraSnapshot | None:
         with self._lock:

@@ -57,6 +57,7 @@ class FemtoBoltCamera(CameraDevice):
         self._pipeline: Optional[Any] = None
         self._intrinsics: Optional[CameraIntrinsics] = None
         self._depth_intrinsics: Optional[CameraIntrinsics] = None
+        self._depth_to_color_transform: Optional[npt.NDArray[np.float64]] = None
         self._started = False
         self._frame_index = 0
 
@@ -120,6 +121,7 @@ class FemtoBoltCamera(CameraDevice):
         if self._use_depth:
             self._depth_intrinsics = self._extract_depth_intrinsics()
             self._depth_intrinsics.validate()
+            self._depth_to_color_transform = self._extract_depth_to_color_transform()
         self._started = True
         LOGGER.info(
             "Started Femto Bolt camera %s name=%s serial=%s",
@@ -257,6 +259,11 @@ class FemtoBoltCamera(CameraDevice):
         if not self._use_depth:
             return None
         return self._depth_intrinsics
+
+    def get_depth_to_color_transform(self) -> Optional[npt.NDArray[np.float64]]:
+        if not self._use_depth:
+            return None
+        return None if self._depth_to_color_transform is None else self._depth_to_color_transform.copy()
 
     def get_frame(self, timeout_ms: int = 1000) -> Optional[CameraFrame]:
         if not self._started or self._pipeline is None:
@@ -442,7 +449,10 @@ class FemtoBoltCamera(CameraDevice):
     def _try_extract_color_intrinsics(self) -> Optional[CameraIntrinsics]:
         intr = None
         try:
-            if hasattr(self._device, "get_color_intrinsics"):
+            if self._pipeline is not None and hasattr(self._pipeline, "get_camera_param"):
+                params = self._pipeline.get_camera_param()
+                intr = getattr(params, "rgb_intrinsic", None)
+            elif hasattr(self._device, "get_color_intrinsics"):
                 intr = self._device.get_color_intrinsics()
         except Exception:
             intr = None
@@ -463,7 +473,10 @@ class FemtoBoltCamera(CameraDevice):
     def _try_extract_depth_intrinsics(self) -> Optional[CameraIntrinsics]:
         intr = None
         try:
-            if hasattr(self._device, "get_depth_intrinsics"):
+            if self._pipeline is not None and hasattr(self._pipeline, "get_camera_param"):
+                params = self._pipeline.get_camera_param()
+                intr = getattr(params, "depth_intrinsic", None)
+            elif hasattr(self._device, "get_depth_intrinsics"):
                 intr = self._device.get_depth_intrinsics()
         except Exception:
             intr = None
@@ -480,6 +493,84 @@ class FemtoBoltCamera(CameraDevice):
             return None
 
         return self._intrinsics_from_struct(intr)
+
+    def _extract_depth_to_color_transform(self) -> Optional[npt.NDArray[np.float64]]:
+        transform = self._try_extract_depth_to_color_transform_from_pipeline()
+        if transform is not None:
+            return transform
+        return self._try_extract_depth_to_color_transform_from_calibration_list()
+
+    def _try_extract_depth_to_color_transform_from_pipeline(self) -> Optional[npt.NDArray[np.float64]]:
+        if self._pipeline is None or not hasattr(self._pipeline, "get_camera_param"):
+            return None
+
+        try:
+            params = self._pipeline.get_camera_param()
+            return self._transform_from_struct(getattr(params, "transform", None))
+        except Exception:
+            return None
+
+    def _try_extract_depth_to_color_transform_from_calibration_list(self) -> Optional[npt.NDArray[np.float64]]:
+        if not hasattr(self._device, "get_calibration_camera_param_list"):
+            return None
+
+        try:
+            params = self._device.get_calibration_camera_param_list()
+            count = int(params.get_count())
+        except Exception:
+            return None
+
+        if count <= 0:
+            return None
+
+        target_w, target_h = self._target_resolution_for_intrinsics(prefer_color=False)
+        best_transform: Optional[npt.NDArray[np.float64]] = None
+        best_score = float("inf")
+
+        for idx in range(count):
+            try:
+                param = params.get_camera_param(int(idx))
+                depth_intr = getattr(param, "depth_intrinsic", None)
+                if depth_intr is None:
+                    continue
+
+                width = int(getattr(depth_intr, "width"))
+                height = int(getattr(depth_intr, "height"))
+                score = abs(width - target_w) + abs(height - target_h)
+
+                transform = self._transform_from_struct(getattr(param, "transform", None))
+                if transform is None:
+                    continue
+
+                if score < best_score:
+                    best_score = float(score)
+                    best_transform = transform
+            except Exception:
+                continue
+
+        return best_transform
+
+    @staticmethod
+    def _transform_from_struct(transform_struct: Any) -> Optional[npt.NDArray[np.float64]]:
+        if transform_struct is None:
+            return None
+
+        try:
+            rotation = np.asarray(getattr(transform_struct, "rot"), dtype=np.float64).reshape(3, 3)
+            translation = np.asarray(getattr(transform_struct, "transform"), dtype=np.float64).reshape(3)
+        except Exception:
+            return None
+
+        if not np.isfinite(rotation).all() or not np.isfinite(translation).all():
+            return None
+        if np.linalg.norm(rotation) < 1e-12:
+            return None
+
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, :3] = rotation
+        # SDK translation is in millimeters; convert to meters for point-cloud math.
+        transform[:3, 3] = translation * 1e-3
+        return transform
 
     def _intrinsics_from_struct(self, intr: Any) -> CameraIntrinsics:
         fx = float(getattr(intr, "fx"))
