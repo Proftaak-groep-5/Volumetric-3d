@@ -1,11 +1,11 @@
-// app/museum/layout.tsx
+// app/museum/createMuseum/layout.tsx
 import type { Metadata } from 'next';
 import { ReactNode } from 'react';
 
 export const metadata: Metadata = {
-    title: 'Museum',
+    title: 'CreateMuseum',
 };
 
-export default function MuseumLayout({ children }: { readonly children: ReactNode }) {
+export default function CreateMuseumLayout({ children }: { readonly children: ReactNode }) {
     return <div className="min-h-screen">{children}</div>;
 }

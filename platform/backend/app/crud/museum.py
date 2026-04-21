@@ -2,9 +2,9 @@ from ..models.museum import Museum
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-async def get_museum_by_id(db: AsyncSession, museum_id):
+async def get_museum_by_id(db: AsyncSession, museumid):
     result = await db.execute(
-        select(Museum).where(Museum.museumid == museum_id)
+        select(Museum).where(Museum.museumid == museumid)
     )
     return result.scalars().first()
 

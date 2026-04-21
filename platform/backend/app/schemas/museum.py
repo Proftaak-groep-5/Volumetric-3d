@@ -1,4 +1,9 @@
+import uuid
+from typing import List
+
 from pydantic import BaseModel, Field, AliasChoices
+
+from ..schemas.recording import RecordingRead
 
 
 #Base
@@ -17,7 +22,8 @@ class MuseumCreate(MuseumBase):
 
 #Read
 class MuseumRead(MuseumBase):
-    museumid: int
+    museumid: uuid.UUID
+    recordings: List[RecordingRead] = []
 
     class Config:
         orm_mode = True

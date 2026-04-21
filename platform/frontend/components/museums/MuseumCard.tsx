@@ -12,7 +12,7 @@ export default function MuseumCard({ museum }: Props) {
                     <h2 className="text-2xl font-semibold text-gray-900">{museum.name}</h2>
                     {museum.owner && (
                         <p className="text-blue-600 mt-1 flex items-center gap-1">
-                            {museum.owner}
+                            {museum.owner?.username}
                         </p>
                     )}
                 </div>

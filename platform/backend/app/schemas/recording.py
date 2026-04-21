@@ -1,3 +1,5 @@
+import uuid
+
 from pydantic import Field, BaseModel
 
 
@@ -9,12 +11,12 @@ class RecordingBase(BaseModel):
 
 #Create
 class RecordingCreate(RecordingBase):
-    pass
+    museumid: str
 
 #Read
 class RecordingRead(RecordingBase):
-    recordingid: int
-    museumid: int
+    recordingid: uuid.UUID
+    museumid: uuid.UUID
 
     class Config:
         orm_mode = True
