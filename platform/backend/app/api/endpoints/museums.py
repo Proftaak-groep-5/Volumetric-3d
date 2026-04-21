@@ -39,7 +39,7 @@ async def create_museum(
 
     return museum
 
-@router.get("/getById", response_model=MuseumRead, status_code=201, responses={400: {"description": "Invalid request"}})
+@router.get("/getById", response_model=MuseumRead, status_code=200, responses={400: {"description": "Invalid request"}})
 async def get_museum_by_id(
         db: DbSession,
         museumid: uuid.UUID

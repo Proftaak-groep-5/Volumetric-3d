@@ -16,5 +16,5 @@ class Museum(Base):
     )
     name = Column(String, unique=True, index=True)
     owner = mapped_column(UUID, ForeignKey("userdata.userid"), index=True)
-    recordings = relationship("Recording", back_populates="museum")
+    recordings = relationship("Recording", back_populates="museum", lazy="selectin")
     description = Column(String)

@@ -55,22 +55,22 @@ export default function MuseumPage() {
 
     return (
         <div>
-            Check browser console for museums data. This page is under construction.
-            {/*<div className="max-w-5xl mx-auto px-6 py-10">*/}
-            {/*    <h1 className="text-4xl font-bold text-gray-800 mb-2">All museums</h1>*/}
-            {/*    <p className="text-gray-600 mb-10">Find museums in our collection</p>*/}
+            <div className="max-w-5xl mx-auto px-6 py-10">
+                <h1 className="text-4xl font-bold text-gray-800 mb-2">All museums</h1>
+                <p className="text-gray-600 mb-10">Find museums in our collection</p>
 
-            {/*    /!*<MuseumSearch searchTerm={searchTerm} onSearchChange={setSearchTerm}/>*!/*/}
+                <MuseumSearch searchTerm={searchTerm} onSearchChange={setSearchTerm}/>
 
-            {/*    /!*<MuseumList museums={filteredMuseums}/>*!/*/}
+                <MuseumList museums={filteredMuseums}/>
 
-            {/*    <Link*/}
-            {/*        href="/createMuseum"*/}
-            {/*        className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-xl transition-all duration-200 px-3 flex items-center gap-2"*/}
-            {/*    >*/}
-            {/*        + Create a museum*/}
-            {/*    </Link>*/}
-            {/*</div>*/}
+                <Link
+                    href="museum/createMuseum"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-xl transition-all duration-200 px-3 flex items-center gap-2"
+                    id="create-museum"
+                >
+                    + Create a museum
+                </Link>
+            </div>
         </div>
     )
 }
