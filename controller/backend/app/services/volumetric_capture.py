@@ -92,7 +92,7 @@ class VolumetricCaptureService:
         preview_path = self._output_dir / f"volumetric_capture_{timestamp}_preview.png"
 
         self._write_ply(ply_path, stacked_points, stacked_colors)
-        self._write_preview(preview_path, stacked_points)
+        self._write_preview(preview_path, stacked_points, stacked_colors)
 
         return CaptureResult(
             file_path=ply_path,
@@ -262,7 +262,7 @@ class VolumetricCaptureService:
                 handle.write(f"{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n")
 
     @staticmethod
-    def _write_preview(path: Path, points: np.ndarray) -> None:
+    def _write_preview(path: Path, points: np.ndarray, colors: np.ndarray) -> None:
         width = 900
         height = 900
         padding = 40
@@ -279,7 +279,8 @@ class VolumetricCaptureService:
         py = (padding + normalized[:, 1] * (height - 2 * padding)).astype(np.int32)
         py = height - py
 
-        for x_coord, y_coord in zip(px, py, strict=False):
-            cv2.circle(canvas, (int(x_coord), int(y_coord)), 1, (80, 235, 140), thickness=-1)
+        for x_coord, y_coord, color in zip(px, py, colors, strict=False):
+            b, g, r = color
+            cv2.circle(canvas, (int(x_coord), int(y_coord)), 1, (int(b), int(g), int(r)), thickness=-1)
 
         cv2.imwrite(str(path), canvas)
