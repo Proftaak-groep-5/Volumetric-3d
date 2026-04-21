@@ -109,6 +109,7 @@ def build_cameras(args: argparse.Namespace, config: CalibrationConfig, cube_mode
 
     cameras = discover_femto_bolt_cameras(
         color_resolution=config.color_resolution,
+        depth_resolution=config.depth_resolution,
         fps=config.fps,
         max_cameras=config.max_cameras,
         use_depth=config.use_depth,

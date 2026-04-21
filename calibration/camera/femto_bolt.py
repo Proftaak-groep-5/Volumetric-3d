@@ -37,6 +37,7 @@ class FemtoBoltCamera(CameraDevice):
         device: Any,
         camera_id: str,
         color_resolution: Tuple[int, int],
+        depth_resolution: Tuple[int, int],
         fps: int,
         use_depth: bool = False,
         camera_tuning: Optional[Mapping[str, Any]] = None,
@@ -46,6 +47,7 @@ class FemtoBoltCamera(CameraDevice):
         self._device = device
         self._camera_id = camera_id
         self._color_resolution = color_resolution
+        self._depth_resolution = depth_resolution
         self._fps = int(fps)
         self._use_depth = bool(use_depth)
         self._camera_tuning = dict(camera_tuning or {})
@@ -54,6 +56,7 @@ class FemtoBoltCamera(CameraDevice):
 
         self._pipeline: Optional[Any] = None
         self._intrinsics: Optional[CameraIntrinsics] = None
+        self._depth_intrinsics: Optional[CameraIntrinsics] = None
         self._started = False
         self._frame_index = 0
 
@@ -114,6 +117,9 @@ class FemtoBoltCamera(CameraDevice):
 
         self._intrinsics = self._extract_intrinsics()
         self._intrinsics.validate()
+        if self._use_depth:
+            self._depth_intrinsics = self._extract_depth_intrinsics()
+            self._depth_intrinsics.validate()
         self._started = True
         LOGGER.info(
             "Started Femto Bolt camera %s name=%s serial=%s",
@@ -247,6 +253,11 @@ class FemtoBoltCamera(CameraDevice):
             raise RuntimeError(f"Camera {self._camera_id} intrinsics are not available before start()")
         return self._intrinsics
 
+    def get_depth_intrinsics(self) -> Optional[CameraIntrinsics]:
+        if not self._use_depth:
+            return None
+        return self._depth_intrinsics
+
     def get_frame(self, timeout_ms: int = 1000) -> Optional[CameraFrame]:
         if not self._started or self._pipeline is None:
             return None
@@ -344,7 +355,10 @@ class FemtoBoltCamera(CameraDevice):
         if OBFormat is None:
             raise RuntimeError("OBFormat enum unavailable")
 
+        depth_width, depth_height = int(self._depth_resolution[0]), int(self._depth_resolution[1])
         candidates = [
+            (depth_width, depth_height, OBFormat.Y16, 30),
+            (depth_width, depth_height, OBFormat.Y16, 15),
             (640, 576, OBFormat.Y16, 30),
             (640, 576, OBFormat.Y16, 15),
             (512, 512, OBFormat.Y16, 30),
@@ -370,7 +384,7 @@ class FemtoBoltCamera(CameraDevice):
     def _extract_intrinsics(self) -> CameraIntrinsics:
         intrinsics = self._try_extract_color_intrinsics()
         if intrinsics is not None:
-            return intrinsics
+            return self._normalize_intrinsics_to_target(intrinsics, prefer_color=True)
 
         intrinsics = self._try_extract_intrinsics_from_calibration_list(prefer_color=True)
         if intrinsics is not None:
@@ -378,13 +392,52 @@ class FemtoBoltCamera(CameraDevice):
 
         intrinsics = self._try_extract_depth_intrinsics()
         if intrinsics is not None:
-            return intrinsics
+            return self._normalize_intrinsics_to_target(intrinsics, prefer_color=False)
 
         intrinsics = self._try_extract_intrinsics_from_calibration_list(prefer_color=False)
         if intrinsics is not None:
             return intrinsics
 
-        return self._fallback_intrinsics_from_profile()
+        return self._fallback_intrinsics_from_profile(prefer_color=True)
+
+    def _extract_depth_intrinsics(self) -> CameraIntrinsics:
+        intrinsics = self._try_extract_depth_intrinsics()
+        if intrinsics is not None:
+            return self._normalize_intrinsics_to_target(intrinsics, prefer_color=False)
+
+        intrinsics = self._try_extract_intrinsics_from_calibration_list(prefer_color=False)
+        if intrinsics is not None:
+            return intrinsics
+
+        intrinsics = self._try_extract_color_intrinsics()
+        if intrinsics is not None:
+            return self._normalize_intrinsics_to_target(intrinsics, prefer_color=False)
+
+        intrinsics = self._try_extract_intrinsics_from_calibration_list(prefer_color=True)
+        if intrinsics is not None:
+            return self._scale_intrinsics_to_resolution(
+                intrinsics,
+                target_w=int(self._depth_resolution[0]),
+                target_h=int(self._depth_resolution[1]),
+            )
+
+        return self._fallback_intrinsics_from_profile(prefer_color=False)
+
+    def _normalize_intrinsics_to_target(self, intrinsics: CameraIntrinsics, prefer_color: bool) -> CameraIntrinsics:
+        target_w, target_h = self._target_resolution_for_intrinsics(prefer_color=prefer_color)
+        if intrinsics.width == target_w and intrinsics.height == target_h:
+            return intrinsics
+
+        LOGGER.info(
+            "Scaling %s intrinsics for camera %s (%sx%s -> %sx%s)",
+            "color" if prefer_color else "depth",
+            self._camera_id,
+            intrinsics.width,
+            intrinsics.height,
+            target_w,
+            target_h,
+        )
+        return self._scale_intrinsics_to_resolution(intrinsics, target_w=target_w, target_h=target_h)
 
     def _try_extract_color_intrinsics(self) -> Optional[CameraIntrinsics]:
         intr = None
@@ -543,8 +596,7 @@ class FemtoBoltCamera(CameraDevice):
         if prefer_color:
             return int(self._color_resolution[0]), int(self._color_resolution[1])
 
-        # Reasonable depth fallback for Femto Bolt when profile metadata is unavailable.
-        return 1024, 1024
+        return int(self._depth_resolution[0]), int(self._depth_resolution[1])
 
     @staticmethod
     def _scale_intrinsics_to_resolution(intrinsics: CameraIntrinsics, target_w: int, target_h: int) -> CameraIntrinsics:
@@ -567,10 +619,12 @@ class FemtoBoltCamera(CameraDevice):
             height=int(target_h),
         )
 
-    def _fallback_intrinsics_from_profile(self) -> CameraIntrinsics:
-        profile = self._color_profile or self._depth_profile
+    def _fallback_intrinsics_from_profile(self, prefer_color: bool) -> CameraIntrinsics:
+        profile = self._color_profile if prefer_color else self._depth_profile
         if profile is None:
-            width, height = self._color_resolution
+            profile = self._color_profile or self._depth_profile
+        if profile is None:
+            width, height = self._color_resolution if prefer_color else self._depth_resolution
         else:
             width = int(profile.get_width())
             height = int(profile.get_height())
@@ -671,6 +725,7 @@ class FemtoBoltCamera(CameraDevice):
 
 def discover_femto_bolt_cameras(
     color_resolution: Tuple[int, int],
+    depth_resolution: Tuple[int, int],
     fps: int,
     max_cameras: int,
     use_depth: bool,
@@ -718,6 +773,7 @@ def discover_femto_bolt_cameras(
             device=device,
             camera_id=camera_id,
             color_resolution=color_resolution,
+            depth_resolution=depth_resolution,
             fps=fps,
             use_depth=use_depth,
             camera_tuning=camera_tuning,

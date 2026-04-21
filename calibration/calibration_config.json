@@ -13,7 +13,8 @@
         "back": 5,
         "bottom": 2
     },
-    "color_res": "3840x2160",
+    "color_res": "1920x1080",
+    "depth_res": "1024x1024",
     "fps": 60,
     "use_depth": true,
     "camera": {

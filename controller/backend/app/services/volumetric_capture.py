@@ -162,8 +162,15 @@ class VolumetricCaptureService:
         )
 
     def _depth_intrinsics_for_frame(self, camera_id: str, frame: RawFrameSnapshot) -> np.ndarray | None:
+        if frame.depth is None:
+            return None
+
+        depth_intrinsics = self._camera_manager.depth_intrinsics(camera_id)
+        if depth_intrinsics is not None:
+            return np.asarray(depth_intrinsics, dtype=np.float64)
+
         intrinsics = self._camera_manager.intrinsics(camera_id)
-        if intrinsics is None or frame.depth is None:
+        if intrinsics is None:
             return None
 
         depth_height, depth_width = frame.depth.shape[:2]

@@ -15,6 +15,8 @@ class Settings:
     calibration_file: Path
     color_width: int
     color_height: int
+    depth_width: int
+    depth_height: int
     fps: int
     use_depth: bool
     max_cameras: int
@@ -77,8 +79,10 @@ def get_settings() -> Settings:
         port=int(os.getenv("PORT", "8000")),
         cors_allowed_origins=_parse_origins(os.getenv("CORS_ALLOWED_ORIGINS", origins_default)),
         calibration_file=Path(os.getenv("CALIBRATION_FILE", str(calibration_default))).resolve(),
-        color_width=int(os.getenv("CAMERA_COLOR_WIDTH", "1280")),
-        color_height=int(os.getenv("CAMERA_COLOR_HEIGHT", "720")),
+        color_width=int(os.getenv("CAMERA_COLOR_WIDTH", "1920")),
+        color_height=int(os.getenv("CAMERA_COLOR_HEIGHT", "1080")),
+        depth_width=int(os.getenv("CAMERA_DEPTH_WIDTH", "1024")),
+        depth_height=int(os.getenv("CAMERA_DEPTH_HEIGHT", "1024")),
         fps=int(os.getenv("CAMERA_FPS", "30")),
         use_depth=os.getenv("CAMERA_USE_DEPTH", "true").lower() in {"1", "true", "yes", "on"},
         max_cameras=int(os.getenv("MAX_CAMERAS", "6")),

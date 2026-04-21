@@ -41,6 +41,8 @@ def startup() -> None:
     camera_manager = CameraStreamManager(
         color_width=settings.color_width,
         color_height=settings.color_height,
+        depth_width=settings.depth_width,
+        depth_height=settings.depth_height,
         fps=settings.fps,
         use_depth=settings.use_depth,
         max_cameras=settings.max_cameras,

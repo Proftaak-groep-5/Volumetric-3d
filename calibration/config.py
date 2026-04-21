@@ -110,6 +110,7 @@ class CalibrationConfig:
     cube: CubeConfig
     face_ids: Dict[str, int]
     color_resolution: Tuple[int, int]
+    depth_resolution: Tuple[int, int]
     fps: int
     frame_count: int = 60
     warmup_frames: int = 5
@@ -240,6 +241,7 @@ class CalibrationConfig:
             ),
             face_ids={str(k): int(v) for k, v in face_payload.items()},
             color_resolution=cls._parse_resolution(payload.get("color_res", "1920x1080")),
+            depth_resolution=cls._parse_resolution(payload.get("depth_res", "1024x1024")),
             fps=int(payload.get("fps", 30)),
             frame_count=int(payload.get("frame_count", 60)),
             warmup_frames=int(payload.get("warmup_frames", 5)),
@@ -300,6 +302,7 @@ class CalibrationConfig:
             },
             "face_ids": self.face_ids,
             "color_res": f"{self.color_resolution[0]}x{self.color_resolution[1]}",
+            "depth_res": f"{self.depth_resolution[0]}x{self.depth_resolution[1]}",
             "fps": self.fps,
             "frame_count": self.frame_count,
             "warmup_frames": self.warmup_frames,

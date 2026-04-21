@@ -34,6 +34,8 @@ class CameraStreamManager:
         *,
         color_width: int,
         color_height: int,
+        depth_width: int,
+        depth_height: int,
         fps: int,
         use_depth: bool,
         max_cameras: int,
@@ -41,6 +43,8 @@ class CameraStreamManager:
     ) -> None:
         self._color_width = color_width
         self._color_height = color_height
+        self._depth_width = depth_width
+        self._depth_height = depth_height
         self._fps = fps
         self._use_depth = use_depth
         self._max_cameras = max_cameras
@@ -50,6 +54,7 @@ class CameraStreamManager:
         self._snapshots: dict[str, CameraSnapshot] = {}
         self._raw_snapshots: dict[str, RawFrameSnapshot] = {}
         self._intrinsics: dict[str, np.ndarray] = {}
+        self._depth_intrinsics: dict[str, np.ndarray] = {}
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -62,6 +67,7 @@ class CameraStreamManager:
 
         self._cameras = discover_femto_bolt_cameras(
             color_resolution=(self._color_width, self._color_height),
+            depth_resolution=(self._depth_width, self._depth_height),
             fps=self._fps,
             max_cameras=self._max_cameras,
             use_depth=self._use_depth,
@@ -73,6 +79,9 @@ class CameraStreamManager:
             camera.start()
             intrinsics = camera.get_intrinsics()
             self._intrinsics[camera.camera_id] = np.asarray(intrinsics.camera_matrix, dtype=np.float64)
+            depth_intrinsics = camera.get_depth_intrinsics()
+            if depth_intrinsics is not None:
+                self._depth_intrinsics[camera.camera_id] = np.asarray(depth_intrinsics.camera_matrix, dtype=np.float64)
             self._snapshots[camera.camera_id] = CameraSnapshot(
                 jpeg=None,
                 frame_index=0,
@@ -184,6 +193,9 @@ class CameraStreamManager:
 
     def intrinsics(self, camera_id: str) -> np.ndarray | None:
         return self._intrinsics.get(camera_id)
+
+    def depth_intrinsics(self, camera_id: str) -> np.ndarray | None:
+        return self._depth_intrinsics.get(camera_id)
 
     def get_snapshot(self, camera_id: str) -> CameraSnapshot | None:
         with self._lock:
