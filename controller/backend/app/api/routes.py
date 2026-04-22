@@ -139,5 +139,6 @@ def create_volumetric_capture(
         cameras_used=result.cameras_used,
         debug={
             "calibration_file": str(calibration_store.calibration_file),
+            "skipped_cameras": result.skipped_cameras,
         },
     )

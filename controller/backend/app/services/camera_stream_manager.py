@@ -26,6 +26,7 @@ class RawFrameSnapshot:
     timestamp_s: float
     color: np.ndarray | None
     depth: np.ndarray | None
+    depth_scale_m: float | None
 
 
 class CameraStreamManager:
@@ -99,6 +100,7 @@ class CameraStreamManager:
                 timestamp_s=time.time(),
                 color=None,
                 depth=None,
+                depth_scale_m=None,
             )
 
         self._running = True
@@ -133,6 +135,7 @@ class CameraStreamManager:
     def _update_raw_snapshot(self, camera_id: str, frame: object) -> None:
         color = getattr(frame, "color", None)
         depth = getattr(frame, "depth", None)
+        depth_scale_m = getattr(frame, "depth_scale_m", None)
         frame_index = int(getattr(frame, "frame_index", 0))
         with self._lock:
             self._raw_snapshots[camera_id] = RawFrameSnapshot(
@@ -141,6 +144,7 @@ class CameraStreamManager:
                 timestamp_s=time.time(),
                 color=None if color is None else color.copy(),
                 depth=None if depth is None else depth.copy(),
+                depth_scale_m=None if depth_scale_m is None else float(depth_scale_m),
             )
 
     def _update_jpeg_snapshot(self, camera_id: str, color_frame: np.ndarray, frame_index: int) -> None:
@@ -191,6 +195,7 @@ class CameraStreamManager:
                 timestamp_s=time.time(),
                 color=color,
                 depth=depth,
+                depth_scale_m=None if getattr(frame, "depth_scale_m", None) is None else float(frame.depth_scale_m),
             )
 
         return None

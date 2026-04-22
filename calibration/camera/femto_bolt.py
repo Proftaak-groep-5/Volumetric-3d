@@ -299,6 +299,7 @@ class FemtoBoltCamera(CameraDevice):
 
         if depth_frame is not None:
             depth = self._decode_depth_frame(depth_frame)
+        depth_scale_m = self._extract_depth_scale_m(depth_frame) if depth_frame is not None else None
 
         frame = CameraFrame(
             camera_id=self._camera_id,
@@ -306,10 +307,25 @@ class FemtoBoltCamera(CameraDevice):
             timestamp_ns=time.time_ns(),
             color=color,
             depth=depth,
+            depth_scale_m=depth_scale_m,
             simulated_marker_poses=None,
         )
         self._frame_index += 1
         return frame
+
+    @staticmethod
+    def _extract_depth_scale_m(depth_frame: Any) -> Optional[float]:
+        if depth_frame is None:
+            return None
+
+        try:
+            scale = float(depth_frame.get_depth_scale())
+        except Exception:
+            return None
+
+        if not np.isfinite(scale) or scale <= 0.0:
+            return None
+        return scale
 
     def _select_color_profile(self, profiles: Any) -> Any:
         width, height = self._color_resolution

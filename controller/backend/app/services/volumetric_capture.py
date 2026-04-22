@@ -20,6 +20,7 @@ class CaptureResult:
     points_total: int
     points_per_camera: dict[str, int]
     cameras_used: list[str]
+    skipped_cameras: dict[str, str]
 
 
 class VolumetricCaptureService:
@@ -58,6 +59,7 @@ class VolumetricCaptureService:
         all_colors: list[np.ndarray] = []
         points_per_camera: dict[str, int] = {}
         cameras_used: list[str] = []
+        skipped_cameras: dict[str, str] = {}
         stats = {
             "no_calibration": 0,
             "no_depth_frame": 0,
@@ -66,7 +68,7 @@ class VolumetricCaptureService:
         }
 
         for camera_id in selected_camera_ids:
-            world_points, colors = self._capture_world_points_for_camera(
+            world_points, colors, skip_reason = self._capture_world_points_for_camera(
                 camera_id,
                 pixel_step=pixel_step_value,
                 depth_min_m=depth_min_value,
@@ -74,6 +76,8 @@ class VolumetricCaptureService:
                 stats=stats,
             )
             if world_points is None or colors is None:
+                if skip_reason is not None:
+                    skipped_cameras[camera_id] = skip_reason
                 continue
 
             all_points_world.append(world_points)
@@ -102,6 +106,7 @@ class VolumetricCaptureService:
             points_total=int(stacked_points.shape[0]),
             points_per_camera=points_per_camera,
             cameras_used=sorted(cameras_used),
+            skipped_cameras=skipped_cameras,
         )
 
     def _capture_world_points_for_camera(
@@ -112,11 +117,11 @@ class VolumetricCaptureService:
         depth_min_m: float,
         depth_max_m: float,
         stats: dict[str, int],
-    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+    ) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
         extrinsics = self._calibration_store.get(camera_id)
         if extrinsics is None:
             stats["no_calibration"] += 1
-            return None, None
+            return None, None, f"{camera_id}: missing calibration entry"
 
         frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
         if frame is None:
@@ -128,12 +133,12 @@ class VolumetricCaptureService:
             )
         if frame is None or frame.depth is None:
             stats["no_depth_frame"] += 1
-            return None, None
+            return None, None, f"{camera_id}: depth frame unavailable"
 
         intrinsics = self._depth_intrinsics_for_frame(camera_id, frame)
         if intrinsics is None:
             stats["no_intrinsics"] += 1
-            return None, None
+            return None, None, f"{camera_id}: intrinsics unavailable"
 
         color_intrinsics = self._camera_manager.intrinsics(camera_id)
         depth_to_color = self._camera_manager.depth_to_color_transform(camera_id)
@@ -147,12 +152,12 @@ class VolumetricCaptureService:
         )
         if depth_points.size == 0:
             stats["no_points_after_filter"] += 1
-            return None, None
+            return None, None, f"{camera_id}: no valid points after depth filter"
 
         color_camera_points = self._depth_camera_to_color_camera(depth_points, depth_to_color)
         colors = self._sample_colors_from_projection(frame, color_camera_points, color_intrinsics)
         world_points = self._camera_to_world(color_camera_points, extrinsics.t_camera_world)
-        return world_points, colors
+        return world_points, colors, None
 
     @staticmethod
     def _build_empty_capture_message(selected_camera_ids: list[str], stats: dict[str, int]) -> str:
@@ -205,12 +210,16 @@ class VolumetricCaptureService:
         if depth.size == 0:
             return np.empty((0, 3), dtype=np.float64)
 
+        depth_scale_m = float(frame.depth_scale_m) if frame.depth_scale_m is not None else self._depth_scale_m
+        if depth_scale_m <= 0.0:
+            depth_scale_m = self._depth_scale_m
+
         sampled = depth[:: pixel_step, :: pixel_step]
         valid = sampled > 0
         if not np.any(valid):
             return np.empty((0, 3), dtype=np.float64)
 
-        z = sampled.astype(np.float64) * self._depth_scale_m
+        z = sampled.astype(np.float64) * depth_scale_m
         valid &= z >= depth_min_m
         valid &= z <= depth_max_m
         if not np.any(valid):
