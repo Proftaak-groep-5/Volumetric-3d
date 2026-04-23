@@ -94,6 +94,17 @@ void HttpServer::start(Callbacks callbacks) {
         if(auto jpeg = callbacks_.latestColorJpeg()) {
             crow::response response;
             response.set_header("Content-Type", "image/jpeg");
+            response.set_header("Cache-Control", "no-store, no-cache, must-revalidate");
+            response.body.assign(reinterpret_cast<const char *>(jpeg->data()), jpeg->size());
+            return response;
+        }
+        return crow::response(404);
+    });
+    CROW_ROUTE(app, "/snapshot/depth-preview.jpg")([this] {
+        if(auto jpeg = callbacks_.latestDepthPreviewJpeg()) {
+            crow::response response;
+            response.set_header("Content-Type", "image/jpeg");
+            response.set_header("Cache-Control", "no-store, no-cache, must-revalidate");
             response.body.assign(reinterpret_cast<const char *>(jpeg->data()), jpeg->size());
             return response;
         }
@@ -103,6 +114,7 @@ void HttpServer::start(Callbacks callbacks) {
         if(auto snapshot = callbacks_.latestDepthSnapshot()) {
             crow::response response;
             response.set_header("Content-Type", "image/png");
+            response.set_header("Cache-Control", "no-store, no-cache, must-revalidate");
             response.set_header("X-Depth-Scale", std::to_string(snapshot->depthScale));
             response.set_header("X-Depth-Width", std::to_string(snapshot->width));
             response.set_header("X-Depth-Height", std::to_string(snapshot->height));
@@ -117,6 +129,7 @@ void HttpServer::start(Callbacks callbacks) {
         if(auto packet = callbacks_.latestDepthPacket()) {
             crow::response response;
             response.set_header("Content-Type", "application/octet-stream");
+            response.set_header("Cache-Control", "no-store, no-cache, must-revalidate");
             response.body.assign(reinterpret_cast<const char *>(packet->data()), packet->size());
             return response;
         }

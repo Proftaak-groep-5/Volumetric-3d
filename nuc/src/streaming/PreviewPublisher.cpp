@@ -7,6 +7,8 @@
 #include <cstring>
 #include <mutex>
 
+#include <spdlog/spdlog.h>
+
 #if NUC_HAS_GSTREAMER
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>

@@ -1,11 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <spdlog/spdlog.h>
 #include <string_view>
-
-namespace spdlog {
-class logger;
-}
 
 namespace femto::log {
 

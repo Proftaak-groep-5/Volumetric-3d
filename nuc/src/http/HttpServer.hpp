@@ -36,6 +36,7 @@ public:
         std::function<nlohmann::json()> reconnect;
         std::function<nlohmann::json()> restart;
         std::function<std::shared_ptr<const std::vector<uint8_t>>()> latestColorJpeg;
+        std::function<std::shared_ptr<const std::vector<uint8_t>>()> latestDepthPreviewJpeg;
         std::function<std::optional<DepthSnapshot>()> latestDepthSnapshot;
         std::function<std::shared_ptr<const std::vector<uint8_t>>()> latestDepthPacket;
         std::function<nlohmann::json()> discovery;

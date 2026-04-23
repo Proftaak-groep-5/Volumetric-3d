@@ -129,20 +129,20 @@ inline constexpr const char *kIndexHtml = R"HTML(
     const depthStatsEl = document.getElementById("depthStats");
     const colorImg = document.getElementById("color");
     const depthImg = document.getElementById("depth");
+    let previewFrame = 0;
 
-    function openPreview(path, img) {
-      const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`);
-      ws.binaryType = "blob";
-      ws.onmessage = (event) => {
-        const url = URL.createObjectURL(event.data);
-        img.onload = () => URL.revokeObjectURL(url);
-        img.src = url;
-      };
-      return ws;
+    function refreshPreview(img, path) {
+      img.src = `${path}?t=${Date.now()}&frame=${previewFrame++}`;
     }
 
-    const colorWs = openPreview("/ws/preview/color", colorImg);
-    const depthWs = openPreview("/ws/preview/depth", depthImg);
+    function startPreviewPolling() {
+      refreshPreview(colorImg, "/snapshot/color.jpg");
+      refreshPreview(depthImg, "/snapshot/depth-preview.jpg");
+      setInterval(() => {
+        refreshPreview(colorImg, "/snapshot/color.jpg");
+        refreshPreview(depthImg, "/snapshot/depth-preview.jpg");
+      }, 250);
+    }
 
     const depthDataWs = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/depth`);
     depthDataWs.binaryType = "arraybuffer";
@@ -183,6 +183,7 @@ inline constexpr const char *kIndexHtml = R"HTML(
 
     setInterval(refresh, 2000);
     refresh();
+    startPreviewPolling();
   </script>
 </body>
 </html>

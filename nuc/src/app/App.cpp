@@ -17,12 +17,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <iomanip>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <thread>
 
 namespace femto {
@@ -110,6 +112,47 @@ std::optional<std::filesystem::path> findFlagPath(int argc, char **argv, const s
     return std::nullopt;
 }
 
+std::filesystem::path executableDirectory() {
+    std::vector<char> buffer(MAX_PATH);
+    DWORD length = 0;
+    while(true) {
+        length = GetModuleFileNameA(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if(length == 0) {
+            return {};
+        }
+        if(length < buffer.size() - 1) {
+            return std::filesystem::path(std::string(buffer.data(), length)).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+}
+
+bool isConfiguredPath(std::string_view value) {
+    return !value.empty() && value != "not-found" && value.find("-NOTFOUND") == std::string_view::npos;
+}
+
+void prependToPathEnvironment(const std::filesystem::path &entry) {
+    const auto entryString = entry.string();
+    if(entryString.empty()) {
+        return;
+    }
+
+    char *currentRaw = nullptr;
+    size_t currentLength = 0;
+    _dupenv_s(&currentRaw, &currentLength, "PATH");
+    std::string currentPath = currentRaw ? currentRaw : "";
+    if(currentRaw) {
+        free(currentRaw);
+    }
+
+    if(currentPath.find(entryString) != std::string::npos) {
+        return;
+    }
+
+    const std::string updatedPath = currentPath.empty() ? entryString : (entryString + ";" + currentPath);
+    _putenv_s("PATH", updatedPath.c_str());
+}
+
 }  // namespace
 
 App::App() = default;
@@ -142,6 +185,7 @@ int App::run(int argc, char **argv) {
     g_app = this;
     SetConsoleCtrlHandler(consoleHandler, TRUE);
     logRuntimeDependencyHints();
+    configureRuntimeEnvironment();
 
     colorPreview_->start(config_.color.width, config_.color.height, config_.color.fps);
     depthPreview_->start(config_.depth.width, config_.depth.height, config_.depth.fps);
@@ -167,6 +211,7 @@ int App::run(int argc, char **argv) {
             return nlohmann::json{ { "ok", true }, { "requested", "restart" } };
         },
         [this] { return colorPreview_->latestJpeg(); },
+        [this] { return depthPreview_->latestJpeg(); },
         [this]() -> std::optional<HttpServer::DepthSnapshot> {
             const auto depth = latestDepthFrameForSnapshots();
             if(!depth) {
@@ -320,6 +365,46 @@ void App::logRuntimeDependencyHints() const {
     if(!ORBBECSDK_FOUND) {
         log::get()->warn("event=runtime_dependency_missing name=orbbec_sdk action=no_camera_mode_only detail=\"Build without Orbbec SDK or finder failed\"");
     }
+}
+
+void App::configureRuntimeEnvironment() const {
+#if GStreamerWindows_FOUND
+    const auto exeDir = executableDirectory();
+    const auto bundledPluginDir = exeDir / "gstreamer-plugins";
+    const auto bundledScanner = exeDir / "gstreamer-libexec" / "gstreamer-1.0" / "gst-plugin-scanner.exe";
+    const std::string gstRoot = FEMTOBOLTNUC_GSTREAMER_ROOT;
+    const std::string gstPluginDir = FEMTOBOLTNUC_GSTREAMER_PLUGIN_DIR;
+
+    prependToPathEnvironment(exeDir);
+    log::get()->info("event=runtime_env variable=PATH prepend={} reason=executable_dir", exeDir.string());
+
+    if(std::filesystem::exists(bundledPluginDir)) {
+        _putenv_s("GST_PLUGIN_PATH", bundledPluginDir.string().c_str());
+        _putenv_s("GST_PLUGIN_SYSTEM_PATH_1_0", bundledPluginDir.string().c_str());
+        log::get()->info("event=runtime_env variable=GST_PLUGIN_PATH value={} reason=bundled_plugins", bundledPluginDir.string());
+    }
+    else if(isConfiguredPath(gstPluginDir) && std::filesystem::exists(gstPluginDir)) {
+        _putenv_s("GST_PLUGIN_PATH", gstPluginDir.c_str());
+        _putenv_s("GST_PLUGIN_SYSTEM_PATH_1_0", gstPluginDir.c_str());
+        log::get()->info("event=runtime_env variable=GST_PLUGIN_PATH value={} reason=system_install", gstPluginDir);
+    }
+    else {
+        log::get()->warn("event=runtime_env_missing variable=GST_PLUGIN_PATH detail=plugin_dir_unresolved");
+    }
+
+    if(std::filesystem::exists(bundledScanner)) {
+        _putenv_s("GST_PLUGIN_SCANNER", bundledScanner.string().c_str());
+        log::get()->info("event=runtime_env variable=GST_PLUGIN_SCANNER value={} reason=bundled_scanner", bundledScanner.string());
+    }
+
+    if(isConfiguredPath(gstRoot)) {
+        const auto gstBinDir = std::filesystem::path(gstRoot) / "bin";
+        if(std::filesystem::exists(gstBinDir)) {
+            prependToPathEnvironment(gstBinDir);
+            log::get()->info("event=runtime_env variable=PATH prepend={} reason=gstreamer_runtime_dlls", gstBinDir.string());
+        }
+    }
+#endif
 }
 
 bool App::syntheticSourceEnabled() const {

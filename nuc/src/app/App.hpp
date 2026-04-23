@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/Config.hpp"
+#include "orbbec/OrbbecCamera.hpp"
 #include "util/StatsCollector.hpp"
 
 #include <atomic>
@@ -14,7 +15,6 @@
 
 namespace femto {
 
-class OrbbecCamera;
 class IPreviewPublisher;
 class DepthBinaryPublisher;
 class HttpServer;
@@ -34,6 +34,7 @@ private:
     void wireCallbacks();
     void handleColorFrame(const OrbbecCamera::FrameEnvelope &frame);
     void handleDepthFrame(const OrbbecCamera::DepthEnvelope &frame, const nlohmann::json &calibration);
+    void configureRuntimeEnvironment() const;
     void logRuntimeDependencyHints() const;
     bool syntheticSourceEnabled() const;
     std::optional<OrbbecCamera::DepthEnvelope> latestDepthFrameForSnapshots() const;

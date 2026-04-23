@@ -181,35 +181,35 @@ nlohmann::json OrbbecCamera::capabilitiesJson() const {
 
 nlohmann::json OrbbecCamera::settingsJson() const {
     std::scoped_lock lock(mutex_);
-    return {
-        { "color", {
-            { "enabled", runtimeSettings_.colorEnabled },
-            { "width", config_.color.width },
-            { "height", config_.color.height },
-            { "fps", config_.color.fps },
-            { "target_bitrate_mbps", config_.color.targetBitrateMbps },
-            { "exposure_auto", runtimeSettings_.colorExposureAuto },
-            { "exposure_value", runtimeSettings_.colorExposureValue },
-            { "gain", runtimeSettings_.colorGain },
-            { "white_balance_auto", runtimeSettings_.colorWhiteBalanceAuto },
-            { "white_balance_value", runtimeSettings_.colorWhiteBalanceValue },
-            { "brightness", runtimeSettings_.colorBrightness },
-            { "contrast", runtimeSettings_.colorContrast },
-            { "saturation", runtimeSettings_.colorSaturation },
-        } },
-        { "depth_preview", {
-            { "enabled", runtimeSettings_.depthPreviewEnabled },
-            { "min_depth_mm", runtimeSettings_.depthPreviewMinMm },
-            { "max_depth_mm", runtimeSettings_.depthPreviewMaxMm },
-            { "target_bitrate_mbps", config_.depthPreview.targetBitrateMbps },
-            { "mode", config_.depthPreview.mode },
-        } },
-        { "authoritative_depth", {
-            { "enabled", runtimeSettings_.depthBinaryEnabled },
-            { "compression", config_.depthBinary.compression },
-            { "compression_level", config_.depthBinary.compressionLevel },
-        } },
+    nlohmann::json settings = nlohmann::json::object();
+    settings["color"] = {
+        { "enabled", runtimeSettings_.colorEnabled },
+        { "width", config_.color.width },
+        { "height", config_.color.height },
+        { "fps", config_.color.fps },
+        { "target_bitrate_mbps", config_.color.targetBitrateMbps },
+        { "exposure_auto", runtimeSettings_.colorExposureAuto },
+        { "exposure_value", runtimeSettings_.colorExposureValue ? nlohmann::json(*runtimeSettings_.colorExposureValue) : nlohmann::json(nullptr) },
+        { "gain", runtimeSettings_.colorGain ? nlohmann::json(*runtimeSettings_.colorGain) : nlohmann::json(nullptr) },
+        { "white_balance_auto", runtimeSettings_.colorWhiteBalanceAuto },
+        { "white_balance_value", runtimeSettings_.colorWhiteBalanceValue ? nlohmann::json(*runtimeSettings_.colorWhiteBalanceValue) : nlohmann::json(nullptr) },
+        { "brightness", runtimeSettings_.colorBrightness ? nlohmann::json(*runtimeSettings_.colorBrightness) : nlohmann::json(nullptr) },
+        { "contrast", runtimeSettings_.colorContrast ? nlohmann::json(*runtimeSettings_.colorContrast) : nlohmann::json(nullptr) },
+        { "saturation", runtimeSettings_.colorSaturation ? nlohmann::json(*runtimeSettings_.colorSaturation) : nlohmann::json(nullptr) },
     };
+    settings["depth_preview"] = {
+        { "enabled", runtimeSettings_.depthPreviewEnabled },
+        { "min_depth_mm", runtimeSettings_.depthPreviewMinMm },
+        { "max_depth_mm", runtimeSettings_.depthPreviewMaxMm },
+        { "target_bitrate_mbps", config_.depthPreview.targetBitrateMbps },
+        { "mode", config_.depthPreview.mode },
+    };
+    settings["authoritative_depth"] = {
+        { "enabled", runtimeSettings_.depthBinaryEnabled },
+        { "compression", config_.depthBinary.compression },
+        { "compression_level", config_.depthBinary.compressionLevel },
+    };
+    return settings;
 }
 
 RuntimeSettings OrbbecCamera::runtimeSettings() const {
@@ -428,35 +428,7 @@ nlohmann::json OrbbecCamera::applySettings(const nlohmann::json &patch) {
         restartRequested_ = true;
     }
 
-    const auto settings = nlohmann::json{
-        { "color", {
-            { "enabled", runtimeSettings_.colorEnabled },
-            { "width", config_.color.width },
-            { "height", config_.color.height },
-            { "fps", config_.color.fps },
-            { "target_bitrate_mbps", config_.color.targetBitrateMbps },
-            { "exposure_auto", runtimeSettings_.colorExposureAuto },
-            { "exposure_value", runtimeSettings_.colorExposureValue },
-            { "gain", runtimeSettings_.colorGain },
-            { "white_balance_auto", runtimeSettings_.colorWhiteBalanceAuto },
-            { "white_balance_value", runtimeSettings_.colorWhiteBalanceValue },
-            { "brightness", runtimeSettings_.colorBrightness },
-            { "contrast", runtimeSettings_.colorContrast },
-            { "saturation", runtimeSettings_.colorSaturation },
-        } },
-        { "depth_preview", {
-            { "enabled", runtimeSettings_.depthPreviewEnabled },
-            { "min_depth_mm", runtimeSettings_.depthPreviewMinMm },
-            { "max_depth_mm", runtimeSettings_.depthPreviewMaxMm },
-            { "target_bitrate_mbps", config_.depthPreview.targetBitrateMbps },
-            { "mode", config_.depthPreview.mode },
-        } },
-        { "authoritative_depth", {
-            { "enabled", runtimeSettings_.depthBinaryEnabled },
-            { "compression", config_.depthBinary.compression },
-            { "compression_level", config_.depthBinary.compressionLevel },
-        } },
-    };
+    const auto settings = settingsJson();
 
     return {
         { "ok", errors.empty() },
@@ -536,121 +508,208 @@ bool OrbbecCamera::connectLocked() {
     return false;
 #else
     try {
+        impl_->device.reset();
+        impl_->pipeline.reset();
+        impl_->pipelineConfig.reset();
+        impl_->colorProfile.reset();
+        impl_->depthProfile.reset();
+
         if(!impl_->context) {
             impl_->context = std::make_unique<ob::Context>();
         }
         auto deviceList = impl_->context->queryDeviceList();
-        if(deviceList->getCount() == 0) {
+        const auto deviceCount = deviceList->getCount();
+        if(deviceCount == 0) {
             lastError_ = "no Orbbec devices found";
             return false;
         }
 
+        struct DeviceCandidate {
+            uint32_t index = 0;
+            std::shared_ptr<ob::Device> device;
+            std::string serialNumber;
+            std::string name;
+        };
+
+        std::vector<DeviceCandidate> candidates;
+        candidates.reserve(deviceCount);
+        for(uint32_t i = 0; i < deviceCount; ++i) {
+            try {
+                auto candidate = deviceList->getDevice(i);
+                if(!candidate) {
+                    log::get()->warn("event=camera device_index={} state=enumerated usable=false reason=null_device", i);
+                    continue;
+                }
+
+                DeviceCandidate entry;
+                entry.index = i;
+                entry.device = candidate;
+
+                try {
+                    if(const auto info = candidate->getDeviceInfo()) {
+                        entry.serialNumber = info->serialNumber();
+                        entry.name = info->name();
+                    }
+                }
+                catch(const std::exception &ex) {
+                    log::get()->warn("event=camera device_index={} state=enumerated usable=true info_error=\"{}\"", i, ex.what());
+                }
+
+                log::get()->info("event=camera device_index={} state=enumerated serial={} name={}", entry.index, entry.serialNumber, entry.name);
+                candidates.push_back(std::move(entry));
+            }
+            catch(const std::exception &ex) {
+                log::get()->warn("event=camera device_index={} state=enumerated usable=false error=\"{}\"", i, ex.what());
+            }
+        }
+
+        if(candidates.empty()) {
+            lastError_ = "Orbbec devices were listed, but none could be opened";
+            return false;
+        }
+
+        std::vector<DeviceCandidate> orderedCandidates;
+        orderedCandidates.reserve(candidates.size());
         if(!config_.camera.serialNumber.empty()) {
-            impl_->device = deviceList->getDeviceBySN(config_.camera.serialNumber);
-            if(!impl_->device) {
+            for(const auto &candidate : candidates) {
+                if(candidate.serialNumber == config_.camera.serialNumber) {
+                    orderedCandidates.push_back(candidate);
+                    break;
+                }
+            }
+            if(orderedCandidates.empty()) {
                 lastError_ = "configured serial not found";
                 return false;
             }
         }
         else {
-            for(uint32_t i = 0; i < deviceList->getCount(); ++i) {
-                auto candidate = deviceList->getDevice(i);
-                if(!candidate) {
-                    continue;
-                }
-                const auto info = candidate->getDeviceInfo();
-                if(info && std::string(info->name()).find("Femto Bolt") != std::string::npos) {
-                    impl_->device = candidate;
-                    break;
+            for(const auto &candidate : candidates) {
+                if(candidate.name.find("Femto Bolt") != std::string::npos || candidate.name.find("FemtoBolt") != std::string::npos) {
+                    orderedCandidates.push_back(candidate);
                 }
             }
-            if(!impl_->device && config_.camera.autoOpenFirstFemtoBolt) {
-                impl_->device = deviceList->getDevice(0);
+            if(orderedCandidates.empty() && config_.camera.autoOpenFirstFemtoBolt) {
+                orderedCandidates = candidates;
             }
         }
-        if(!impl_->device) {
+        if(orderedCandidates.empty()) {
             lastError_ = "no matching Orbbec device found";
             return false;
         }
 
-        if(config_.camera.enableGlobalTimestamp && impl_->device->isGlobalTimestampSupported()) {
-            impl_->device->enableGlobalTimestamp(true);
-        }
-
-        impl_->pipeline = std::make_unique<ob::Pipeline>(impl_->device);
-        impl_->pipelineConfig = std::make_shared<ob::Config>();
-
-        auto colorProfiles = impl_->pipeline->getStreamProfileList(OB_SENSOR_COLOR);
-        std::shared_ptr<ob::VideoStreamProfile> selectedColor;
-        for(uint32_t i = 0; i < colorProfiles->getCount(); ++i) {
-            auto profile = colorProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
-            const auto format = profile->getFormat();
-            if(profile->getWidth() == config_.color.width && profile->getHeight() == config_.color.height && profile->getFps() == config_.color.fps
-               && (format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
-                   || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG)) {
-                selectedColor = profile;
-                break;
-            }
-        }
-        if(!selectedColor) {
-            for(uint32_t i = 0; i < colorProfiles->getCount(); ++i) {
-                auto profile = colorProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
-                const auto format = profile->getFormat();
-                if(format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
-                   || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG) {
-                    selectedColor = profile;
-                    break;
-                }
-            }
-        }
-        if(selectedColor) {
-            impl_->pipelineConfig->enableStream(selectedColor);
-            impl_->colorProfile = selectedColor;
-        }
-
-        auto depthProfiles = impl_->pipeline->getStreamProfileList(OB_SENSOR_DEPTH);
-        std::shared_ptr<ob::VideoStreamProfile> selectedDepth;
-        for(uint32_t i = 0; i < depthProfiles->getCount(); ++i) {
-            auto profile = depthProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
-            const auto format = profile->getFormat();
-            if(profile->getWidth() == config_.depth.width && profile->getHeight() == config_.depth.height && profile->getFps() == config_.depth.fps
-               && (format == OB_FORMAT_Y16 || format == OB_FORMAT_Z16)) {
-                selectedDepth = profile;
-                break;
-            }
-        }
-        if(!selectedDepth) {
-            for(uint32_t i = 0; i < depthProfiles->getCount(); ++i) {
-                auto profile = depthProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
-                if(profile->getFormat() == OB_FORMAT_Y16 || profile->getFormat() == OB_FORMAT_Z16) {
-                    selectedDepth = profile;
-                    break;
-                }
-            }
-        }
-        if(selectedDepth) {
-            impl_->pipelineConfig->enableStream(selectedDepth);
-            impl_->depthProfile = selectedDepth;
-        }
-
-        if(config_.depth.alignToColor) {
+        std::string attemptErrors;
+        for(const auto &candidate : orderedCandidates) {
             try {
-                impl_->pipelineConfig->setAlignMode(ALIGN_D2C_HW_MODE);
+                impl_->device = candidate.device;
+
+                if(config_.camera.enableGlobalTimestamp && impl_->device->isGlobalTimestampSupported()) {
+                    impl_->device->enableGlobalTimestamp(true);
+                }
+
+                impl_->pipeline = std::make_unique<ob::Pipeline>(impl_->device);
+                impl_->pipelineConfig = std::make_shared<ob::Config>();
+
+                if(config_.color.enabled) {
+                    auto colorProfiles = impl_->pipeline->getStreamProfileList(OB_SENSOR_COLOR);
+                    std::shared_ptr<ob::VideoStreamProfile> selectedColor;
+                    for(uint32_t i = 0; i < colorProfiles->getCount(); ++i) {
+                        auto profile = colorProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
+                        const auto format = profile->getFormat();
+                        if(profile->getWidth() == config_.color.width && profile->getHeight() == config_.color.height && profile->getFps() == config_.color.fps
+                           && (format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
+                               || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG)) {
+                            selectedColor = profile;
+                            break;
+                        }
+                    }
+                    if(!selectedColor) {
+                        for(uint32_t i = 0; i < colorProfiles->getCount(); ++i) {
+                            auto profile = colorProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
+                            const auto format = profile->getFormat();
+                            if(format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
+                               || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG) {
+                                selectedColor = profile;
+                                break;
+                            }
+                        }
+                    }
+                    if(selectedColor) {
+                        impl_->pipelineConfig->enableStream(selectedColor);
+                        impl_->colorProfile = selectedColor;
+                    }
+                }
+
+                if(config_.depth.enabled) {
+                    auto depthProfiles = impl_->pipeline->getStreamProfileList(OB_SENSOR_DEPTH);
+                    std::shared_ptr<ob::VideoStreamProfile> selectedDepth;
+                    for(uint32_t i = 0; i < depthProfiles->getCount(); ++i) {
+                        auto profile = depthProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
+                        const auto format = profile->getFormat();
+                        if(profile->getWidth() == config_.depth.width && profile->getHeight() == config_.depth.height && profile->getFps() == config_.depth.fps
+                           && (format == OB_FORMAT_Y16 || format == OB_FORMAT_Z16)) {
+                            selectedDepth = profile;
+                            break;
+                        }
+                    }
+                    if(!selectedDepth) {
+                        for(uint32_t i = 0; i < depthProfiles->getCount(); ++i) {
+                            auto profile = depthProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
+                            if(profile->getFormat() == OB_FORMAT_Y16 || profile->getFormat() == OB_FORMAT_Z16) {
+                                selectedDepth = profile;
+                                break;
+                            }
+                        }
+                    }
+                    if(selectedDepth) {
+                        impl_->pipelineConfig->enableStream(selectedDepth);
+                        impl_->depthProfile = selectedDepth;
+                    }
+                }
+
+                if(config_.color.enabled && !impl_->colorProfile) {
+                    throw std::runtime_error("no compatible color stream profile found");
+                }
+                if(config_.depth.enabled && !impl_->depthProfile) {
+                    throw std::runtime_error("no compatible depth stream profile found");
+                }
+
+                if(config_.depth.alignToColor) {
+                    try {
+                        impl_->pipelineConfig->setAlignMode(ALIGN_D2C_HW_MODE);
+                    }
+                    catch(...) {
+                    }
+                }
+
+                impl_->pipeline->enableFrameSync();
+                impl_->pipeline->start(impl_->pipelineConfig);
+
+                connected_ = true;
+                lastError_.clear();
+                rebuildMetadataLocked();
+                rebuildCapabilitiesLocked();
+                log::get()->info("event=camera state=connected serial={} name={}", metadata_["device"].value("serial_number", ""),
+                                 metadata_["device"].value("name", ""));
+                return true;
             }
-            catch(...) {
+            catch(const std::exception &ex) {
+                if(!attemptErrors.empty()) {
+                    attemptErrors += "; ";
+                }
+                attemptErrors += "device_index=" + std::to_string(candidate.index) + " serial=" + candidate.serialNumber + " name=" + candidate.name
+                                 + " error=" + ex.what();
+                log::get()->warn("event=camera device_index={} state=open_failed serial={} name={} error=\"{}\"", candidate.index, candidate.serialNumber,
+                                 candidate.name, ex.what());
+                impl_->device.reset();
+                impl_->pipeline.reset();
+                impl_->pipelineConfig.reset();
+                impl_->colorProfile.reset();
+                impl_->depthProfile.reset();
             }
         }
 
-        impl_->pipeline->enableFrameSync();
-        impl_->pipeline->start(impl_->pipelineConfig);
-
-        connected_ = true;
-        lastError_.clear();
-        rebuildMetadataLocked();
-        rebuildCapabilitiesLocked();
-        log::get()->info("event=camera state=connected serial={} name={}", metadata_["device"].value("serial_number", ""),
-                         metadata_["device"].value("name", ""));
-        return true;
+        lastError_ = attemptErrors.empty() ? "no usable Orbbec device found" : attemptErrors;
+        return false;
     }
     catch(const std::exception &ex) {
         lastError_ = ex.what();

@@ -53,8 +53,33 @@ find_library(GStreamerWindows_GLIB_LIBRARY
     NAMES glib-2.0
     PATH_SUFFIXES lib
     HINTS ${_gst_hints})
+
+find_file(GStreamerWindows_GSTREAMER_DLL
+    NAMES gstreamer-1.0-0.dll libgstreamer-1.0-0.dll
+    PATH_SUFFIXES bin
+    HINTS ${_gst_hints})
+find_file(GStreamerWindows_GSTAPP_DLL
+    NAMES gstapp-1.0-0.dll libgstapp-1.0-0.dll
+    PATH_SUFFIXES bin
+    HINTS ${_gst_hints})
+find_file(GStreamerWindows_GSTBASE_DLL
+    NAMES gstbase-1.0-0.dll libgstbase-1.0-0.dll
+    PATH_SUFFIXES bin
+    HINTS ${_gst_hints})
+find_file(GStreamerWindows_GSTVIDEO_DLL
+    NAMES gstvideo-1.0-0.dll libgstvideo-1.0-0.dll
+    PATH_SUFFIXES bin
+    HINTS ${_gst_hints})
+find_file(GStreamerWindows_GOBJECT_DLL
+    NAMES gobject-2.0-0.dll libgobject-2.0-0.dll
+    PATH_SUFFIXES bin
+    HINTS ${_gst_hints})
+find_file(GStreamerWindows_GLIB_DLL
+    NAMES glib-2.0-0.dll libglib-2.0-0.dll
+    PATH_SUFFIXES bin
+    HINTS ${_gst_hints})
 find_path(GStreamerWindows_PLUGIN_DIR
-    NAMES coreelements.dll
+    NAMES gstcoreelements.dll coreelements.dll libgstcoreelements.dll
     PATH_SUFFIXES lib/gstreamer-1.0
     HINTS ${_gst_hints})
 
@@ -85,4 +110,12 @@ if(GStreamerWindows_FOUND)
         ${GStreamerWindows_GSTVIDEO_LIBRARY}
         ${GStreamerWindows_GOBJECT_LIBRARY}
         ${GStreamerWindows_GLIB_LIBRARY})
+
+    set(GStreamerWindows_RUNTIME_DLLS
+        ${GStreamerWindows_GSTREAMER_DLL}
+        ${GStreamerWindows_GSTAPP_DLL}
+        ${GStreamerWindows_GSTBASE_DLL}
+        ${GStreamerWindows_GSTVIDEO_DLL}
+        ${GStreamerWindows_GOBJECT_DLL}
+        ${GStreamerWindows_GLIB_DLL})
 endif()
