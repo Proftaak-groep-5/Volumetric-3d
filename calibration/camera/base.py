@@ -40,6 +40,7 @@ class CameraFrame:
     timestamp_ns: int
     color: Optional[npt.NDArray[np.uint8]] = None
     depth: Optional[npt.NDArray[np.uint16]] = None
+    depth_scale_m: float | None = None
     simulated_marker_poses: Optional[List[SimulatedMarkerPose]] = field(default=None)
 
 
