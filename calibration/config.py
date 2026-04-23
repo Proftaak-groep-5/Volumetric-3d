@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 
+from calibration.camera.network_api import NetworkCameraDiscoveryConfig
+
 REQUIRED_FACES: Tuple[str, ...] = ("front", "top", "left", "right", "back", "bottom")
 
 
@@ -119,6 +121,7 @@ class CalibrationConfig:
     use_depth: bool = False
     camera_ids: Optional[List[str]] = None
     camera: CameraTuningConfig = field(default_factory=CameraTuningConfig)
+    network_camera: NetworkCameraDiscoveryConfig = field(default_factory=NetworkCameraDiscoveryConfig)
     quality: QualityConfig = field(default_factory=QualityConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
 
@@ -175,6 +178,10 @@ class CalibrationConfig:
         camera_payload = payload.get("camera", {})
         if not isinstance(camera_payload, Mapping):
             camera_payload = {}
+
+        network_camera_payload = payload.get("network_camera", {})
+        if not isinstance(network_camera_payload, Mapping):
+            network_camera_payload = {}
 
         debug_payload = payload.get("debug", {})
         if isinstance(debug_payload, bool):
@@ -250,6 +257,7 @@ class CalibrationConfig:
             use_depth=bool(payload.get("use_depth", False)),
             camera_ids=[str(x) for x in payload.get("camera_ids", [])] or None,
             camera=camera,
+            network_camera=NetworkCameraDiscoveryConfig.from_mapping(network_camera_payload),
             quality=quality,
             debug=debug,
         )
@@ -259,6 +267,7 @@ class CalibrationConfig:
     def validate(self) -> None:
         self.cube.validate()
         self.camera.validate()
+        self.network_camera.validate()
         self.quality.validate()
 
         if self.fps <= 0:
@@ -267,8 +276,8 @@ class CalibrationConfig:
             raise ValueError("frame_count must be > 0")
         if self.warmup_frames < 0:
             raise ValueError("warmup_frames must be >= 0")
-        if not (1 <= self.max_cameras <= 6):
-            raise ValueError("max_cameras must be between 1 and 6")
+        if self.max_cameras < 1:
+            raise ValueError("max_cameras must be >= 1")
         if self.world_origin != "cube_center":
             raise ValueError("Only world_origin='cube_center' is currently supported")
 
@@ -311,6 +320,7 @@ class CalibrationConfig:
             "use_depth": self.use_depth,
             "camera_ids": self.camera_ids,
             "camera": self.camera.to_dict(),
+            "network_camera": self.network_camera.to_dict(),
             "quality": {
                 "min_markers_per_frame": self.quality.min_markers_per_frame,
                 "min_valid_frames_per_camera": self.quality.min_valid_frames_per_camera,

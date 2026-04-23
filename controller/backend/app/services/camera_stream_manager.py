@@ -3,11 +3,16 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+import logging
 
 import cv2
 import numpy as np
 
-from calibration.camera.femto_bolt import FemtoBoltCamera, discover_femto_bolt_cameras
+from calibration.camera.base import CameraDevice
+from calibration.camera.femto_bolt import discover_femto_bolt_cameras
+from calibration.camera.network_api import NetworkCameraDiscoveryConfig, discover_network_api_cameras
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,6 +46,7 @@ class CameraStreamManager:
         use_depth: bool,
         max_cameras: int,
         camera_tuning: dict[str, int | bool] | None,
+        network_camera: NetworkCameraDiscoveryConfig,
     ) -> None:
         self._color_width = color_width
         self._color_height = color_height
@@ -50,8 +56,9 @@ class CameraStreamManager:
         self._use_depth = use_depth
         self._max_cameras = max_cameras
         self._camera_tuning = dict(camera_tuning or {})
+        self._network_camera = network_camera
 
-        self._cameras: list[FemtoBoltCamera] = []
+        self._cameras: list[CameraDevice] = []
         self._snapshots: dict[str, CameraSnapshot] = {}
         self._raw_snapshots: dict[str, RawFrameSnapshot] = {}
         self._intrinsics: dict[str, np.ndarray] = {}
@@ -62,12 +69,20 @@ class CameraStreamManager:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._capture_lock = threading.Lock()
+        self._failed_camera_ids: set[str] = set()
 
     def start(self) -> None:
         if self._running:
             return
 
-        self._cameras = discover_femto_bolt_cameras(
+        self._snapshots.clear()
+        self._raw_snapshots.clear()
+        self._intrinsics.clear()
+        self._depth_intrinsics.clear()
+        self._depth_to_color.clear()
+        self._failed_camera_ids.clear()
+
+        usb_cameras = discover_femto_bolt_cameras(
             color_resolution=(self._color_width, self._color_height),
             depth_resolution=(self._depth_width, self._depth_height),
             fps=self._fps,
@@ -76,9 +91,18 @@ class CameraStreamManager:
             allowed_camera_ids=None,
             camera_tuning=self._camera_tuning,
         )
+        network_cameras = discover_network_api_cameras(
+            use_depth=self._use_depth,
+            allowed_camera_ids=None,
+            discovery_config=self._network_camera,
+        )
+        self._cameras = [*usb_cameras, *network_cameras]
 
+        started_cameras: list[CameraDevice] = []
         for camera in self._cameras:
-            camera.start()
+            if not self._start_camera_with_retries(camera):
+                self._failed_camera_ids.add(camera.camera_id)
+                continue
             intrinsics = camera.get_intrinsics()
             self._intrinsics[camera.camera_id] = np.asarray(intrinsics.camera_matrix, dtype=np.float64)
             depth_intrinsics = camera.get_depth_intrinsics()
@@ -102,6 +126,9 @@ class CameraStreamManager:
                 depth=None,
                 depth_scale_m=None,
             )
+            started_cameras.append(camera)
+
+        self._cameras = started_cameras
 
         self._running = True
         self._thread = threading.Thread(target=self._capture_loop, name="femto-capture", daemon=True)
@@ -116,6 +143,33 @@ class CameraStreamManager:
         for camera in self._cameras:
             camera.stop()
         self._cameras = []
+        self._snapshots.clear()
+        self._raw_snapshots.clear()
+        self._intrinsics.clear()
+        self._depth_intrinsics.clear()
+        self._depth_to_color.clear()
+        self._failed_camera_ids.clear()
+
+    def _start_camera_with_retries(self, camera: CameraDevice, attempts: int = 3, delay_s: float = 1.0) -> bool:
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                camera.start()
+                return True
+            except Exception as exc:
+                LOGGER.warning(
+                    "Camera start failed camera=%s attempt=%s/%s error=%s",
+                    camera.camera_id,
+                    attempt,
+                    attempts,
+                    exc,
+                )
+                try:
+                    camera.stop()
+                except Exception:
+                    pass
+                if attempt < attempts:
+                    time.sleep(delay_s)
+        return False
 
     def _capture_loop(self) -> None:
         sleep_s = max(0.001, 1.0 / max(1, self._fps))
@@ -232,6 +286,7 @@ class CameraStreamManager:
                     "camera_id": camera.camera_id,
                     "serial_number": camera.serial_number,
                     "device_name": camera.device_name,
+                    "connection_type": camera.connection_type,
                     "width": snapshot.width if snapshot else self._color_width,
                     "height": snapshot.height if snapshot else self._color_height,
                     "fps": self._fps,

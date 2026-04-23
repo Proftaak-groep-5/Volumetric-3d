@@ -76,6 +76,10 @@ class FemtoBoltCamera(CameraDevice):
     def device_name(self) -> str:
         return self._device_name
 
+    @property
+    def connection_type(self) -> str:
+        return "usb"
+
     def start(self) -> None:
         if self._started:
             return
@@ -325,7 +329,8 @@ class FemtoBoltCamera(CameraDevice):
 
         if not np.isfinite(scale) or scale <= 0.0:
             return None
-        return scale
+        # Orbbec depth scale is reported in millimeters-per-raw-unit.
+        return scale * 1e-3
 
     def _select_color_profile(self, profiles: Any) -> Any:
         width, height = self._color_resolution

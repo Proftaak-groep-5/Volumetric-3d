@@ -24,6 +24,15 @@
         "color_white_balance": null,
         "color_brightness": 10
     },
+    "network_camera": {
+        "enabled": true,
+        "subnet": "192.168.137.0/24",
+        "ips": [],
+        "ports": [8080],
+        "timeout_ms": 350,
+        "max_cameras": 16,
+        "max_workers": 32
+    },
     "frame_count": 60,
     "warmup_frames": 5,
     "max_cameras": 6,

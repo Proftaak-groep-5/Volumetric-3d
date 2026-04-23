@@ -11,6 +11,7 @@ from calibration.calibration.multi_camera_calibrator import MultiCameraCalibrato
 from calibration.camera.base import CameraDevice
 from calibration.camera.femto_bolt import discover_femto_bolt_cameras
 from calibration.camera.mock_camera import create_mock_cameras
+from calibration.camera.network_api import discover_network_api_cameras
 from calibration.config import CalibrationConfig, load_config
 from calibration.io.export_json import export_calibration_results
 from calibration.io.visualization import DebugVisualizer
@@ -107,7 +108,7 @@ def build_cameras(args: argparse.Namespace, config: CalibrationConfig, cube_mode
             seed=int(args.mock_seed),
         )
 
-    cameras = discover_femto_bolt_cameras(
+    usb_cameras = discover_femto_bolt_cameras(
         color_resolution=config.color_resolution,
         depth_resolution=config.depth_resolution,
         fps=config.fps,
@@ -117,7 +118,15 @@ def build_cameras(args: argparse.Namespace, config: CalibrationConfig, cube_mode
         camera_tuning=config.camera.to_dict(),
     )
 
-    return list(cameras)
+    network_cameras = discover_network_api_cameras(
+        use_depth=config.use_depth,
+        allowed_camera_ids=config.camera_ids,
+        discovery_config=config.network_camera,
+    )
+
+    cameras: list[CameraDevice] = list(usb_cameras)
+    cameras.extend(network_cameras)
+    return cameras
 
 
 def load_and_prepare_config(args: argparse.Namespace) -> CalibrationConfig:

@@ -43,6 +43,7 @@ def list_cameras(camera_manager: Annotated[CameraStreamManager, Depends(get_came
                 camera_id=camera_id,
                 serial_number=str(item.get("serial_number") or ""),
                 device_name=str(item.get("device_name") or ""),
+                connection_type=str(item.get("connection_type") or ""),
                 width=int(item["width"]),
                 height=int(item["height"]),
                 fps=int(item["fps"]),

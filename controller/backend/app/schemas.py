@@ -9,6 +9,7 @@ class CameraInfo(BaseModel):
     camera_id: str
     serial_number: str | None = None
     device_name: str | None = None
+    connection_type: str | None = None
     width: int
     height: int
     fps: int

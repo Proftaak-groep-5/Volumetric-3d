@@ -67,3 +67,21 @@ class CameraDevice(ABC):
     @abstractmethod
     def get_frame(self, timeout_ms: int = 1000) -> Optional[CameraFrame]:
         raise NotImplementedError
+
+    def get_depth_intrinsics(self) -> Optional[CameraIntrinsics]:
+        return None
+
+    def get_depth_to_color_transform(self) -> npt.NDArray[np.float64] | None:
+        return None
+
+    @property
+    def serial_number(self) -> str:
+        return ""
+
+    @property
+    def device_name(self) -> str:
+        return ""
+
+    @property
+    def connection_type(self) -> str:
+        return "unknown"

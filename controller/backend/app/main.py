@@ -47,6 +47,7 @@ def startup() -> None:
         use_depth=settings.use_depth,
         max_cameras=settings.max_cameras,
         camera_tuning=settings.camera_tuning,
+        network_camera=settings.network_camera,
     )
 
     try:
