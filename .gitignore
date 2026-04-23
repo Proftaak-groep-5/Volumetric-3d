@@ -92,3 +92,7 @@ sysinfo.txt
 # OS
 .DS_Store
 Thumbs.db
+
+.next
+controller/backend/Log/OrbbecSDK.log.txt
+controller/backend/Log/OrbbecSDK.log.txt

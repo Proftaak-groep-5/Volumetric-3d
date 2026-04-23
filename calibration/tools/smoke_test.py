@@ -377,6 +377,7 @@ def run_single_camera_smoke_test(
 
     cameras = discover_femto_bolt_cameras(
         color_resolution=config.color_resolution,
+        depth_resolution=config.depth_resolution,
         fps=config.fps,
         max_cameras=1,
         use_depth=True,
