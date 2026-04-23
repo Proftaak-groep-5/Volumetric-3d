@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import logging
 
@@ -10,7 +11,7 @@ import numpy as np
 
 from calibration.camera.base import CameraDevice
 from calibration.camera.femto_bolt import discover_femto_bolt_cameras
-from calibration.camera.network_api import NetworkCameraDiscoveryConfig, discover_network_api_cameras
+from calibration.camera.network_api import NetworkApiCamera, NetworkCameraDiscoveryConfig, discover_network_api_cameras
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class CameraStreamManager:
         self._network_camera = network_camera
 
         self._cameras: list[CameraDevice] = []
+        self._camera_by_id: dict[str, CameraDevice] = {}
         self._snapshots: dict[str, CameraSnapshot] = {}
         self._raw_snapshots: dict[str, RawFrameSnapshot] = {}
         self._intrinsics: dict[str, np.ndarray] = {}
@@ -66,9 +68,9 @@ class CameraStreamManager:
         self._depth_to_color: dict[str, np.ndarray] = {}
 
         self._running = False
-        self._thread: threading.Thread | None = None
+        self._threads: dict[str, threading.Thread] = {}
         self._lock = threading.Lock()
-        self._capture_lock = threading.Lock()
+        self._camera_locks: dict[str, threading.Lock] = {}
         self._failed_camera_ids: set[str] = set()
 
     def start(self) -> None:
@@ -81,6 +83,8 @@ class CameraStreamManager:
         self._depth_intrinsics.clear()
         self._depth_to_color.clear()
         self._failed_camera_ids.clear()
+        self._camera_by_id.clear()
+        self._camera_locks.clear()
 
         usb_cameras = discover_femto_bolt_cameras(
             color_resolution=(self._color_width, self._color_height),
@@ -96,7 +100,10 @@ class CameraStreamManager:
             allowed_camera_ids=None,
             discovery_config=self._network_camera,
         )
+        self._configure_network_cameras(network_cameras)
         self._cameras = [*usb_cameras, *network_cameras]
+        self._camera_by_id = {camera.camera_id: camera for camera in self._cameras}
+        self._camera_locks = {camera.camera_id: threading.Lock() for camera in self._cameras}
 
         started_cameras: list[CameraDevice] = []
         for camera in self._cameras:
@@ -129,26 +136,103 @@ class CameraStreamManager:
             started_cameras.append(camera)
 
         self._cameras = started_cameras
+        self._camera_by_id = {camera.camera_id: camera for camera in self._cameras}
+        self._camera_locks = {camera.camera_id: self._camera_locks.get(camera.camera_id, threading.Lock()) for camera in self._cameras}
 
         self._running = True
-        self._thread = threading.Thread(target=self._capture_loop, name="femto-capture", daemon=True)
-        self._thread.start()
+        self._threads = {}
+        for camera in self._cameras:
+            thread = threading.Thread(
+                target=self._capture_loop,
+                args=(camera,),
+                name=f"capture-{camera.camera_id}",
+                daemon=True,
+            )
+            thread.start()
+            self._threads[camera.camera_id] = thread
 
     def stop(self) -> None:
         self._running = False
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
+        for thread in self._threads.values():
+            thread.join(timeout=2.0)
+        self._threads.clear()
 
         for camera in self._cameras:
             camera.stop()
         self._cameras = []
+        self._camera_by_id.clear()
         self._snapshots.clear()
         self._raw_snapshots.clear()
         self._intrinsics.clear()
         self._depth_intrinsics.clear()
         self._depth_to_color.clear()
         self._failed_camera_ids.clear()
+        self._camera_locks.clear()
+
+    def _configure_network_cameras(self, cameras: list[NetworkApiCamera]) -> None:
+        for camera in cameras:
+            try:
+                response = camera.apply_stream_configuration(
+                    color_width=self._color_width,
+                    color_height=self._color_height,
+                    depth_width=self._depth_width,
+                    depth_height=self._depth_height,
+                    fps=self._fps,
+                    align_to_color=False,
+                )
+                LOGGER.info(
+                    "Configured network camera id=%s color=%sx%s depth=%sx%s fps=%s restart_required=%s",
+                    camera.camera_id,
+                    self._color_width,
+                    self._color_height,
+                    self._depth_width,
+                    self._depth_height,
+                    self._fps,
+                    bool(response.get("restart_required", False)),
+                )
+            except Exception as exc:
+                LOGGER.warning("Failed to configure network camera %s via HTTP settings: %s", camera.camera_id, exc)
+
+    def configure_network_camera_streams(self, camera_ids: list[str] | None = None) -> dict[str, dict[str, str | bool | int]]:
+        selected_ids = set(camera_ids or [])
+        results: dict[str, dict[str, str | bool | int]] = {}
+        for camera in self._cameras:
+            if not isinstance(camera, NetworkApiCamera):
+                continue
+            if selected_ids and camera.camera_id not in selected_ids:
+                continue
+            try:
+                response = camera.apply_stream_configuration(
+                    color_width=self._color_width,
+                    color_height=self._color_height,
+                    depth_width=self._depth_width,
+                    depth_height=self._depth_height,
+                    fps=self._fps,
+                    align_to_color=False,
+                )
+                intrinsics = camera.get_intrinsics()
+                self._intrinsics[camera.camera_id] = np.asarray(intrinsics.camera_matrix, dtype=np.float64)
+                depth_intrinsics = camera.get_depth_intrinsics()
+                if depth_intrinsics is not None:
+                    self._depth_intrinsics[camera.camera_id] = np.asarray(depth_intrinsics.camera_matrix, dtype=np.float64)
+                depth_to_color = camera.get_depth_to_color_transform()
+                if depth_to_color is not None:
+                    self._depth_to_color[camera.camera_id] = np.asarray(depth_to_color, dtype=np.float64)
+                results[camera.camera_id] = {
+                    "ok": True,
+                    "restart_required": bool(response.get("restart_required", False)),
+                    "color_width": int(intrinsics.width),
+                    "color_height": int(intrinsics.height),
+                    "depth_width": int(depth_intrinsics.width) if depth_intrinsics is not None else self._depth_width,
+                    "depth_height": int(depth_intrinsics.height) if depth_intrinsics is not None else self._depth_height,
+                    "fps": int(self._fps),
+                }
+            except Exception as exc:
+                results[camera.camera_id] = {
+                    "ok": False,
+                    "error": str(exc),
+                }
+        return results
 
     def _start_camera_with_retries(self, camera: CameraDevice, attempts: int = 3, delay_s: float = 1.0) -> bool:
         for attempt in range(1, max(1, attempts) + 1):
@@ -171,20 +255,26 @@ class CameraStreamManager:
                     time.sleep(delay_s)
         return False
 
-    def _capture_loop(self) -> None:
+    def _capture_loop(self, camera: CameraDevice) -> None:
         sleep_s = max(0.001, 1.0 / max(1, self._fps))
         while self._running:
-            for camera in self._cameras:
-                with self._capture_lock:
+            loop_started = time.perf_counter()
+            try:
+                with self._camera_locks[camera.camera_id]:
                     frame = camera.get_frame(timeout_ms=200)
-                if frame is None:
-                    continue
-                self._update_raw_snapshot(camera.camera_id, frame)
-                if frame.color is None:
-                    continue
-                self._update_jpeg_snapshot(camera.camera_id, frame.color, frame.frame_index)
+            except Exception:
+                LOGGER.exception("Camera capture loop failed camera=%s", camera.camera_id)
+                time.sleep(sleep_s)
+                continue
 
-            time.sleep(sleep_s)
+            if frame is not None:
+                self._update_raw_snapshot(camera.camera_id, frame)
+                if frame.color is not None:
+                    self._update_jpeg_snapshot(camera.camera_id, frame.color, frame.frame_index)
+
+            elapsed_s = time.perf_counter() - loop_started
+            if elapsed_s < sleep_s:
+                time.sleep(sleep_s - elapsed_s)
 
     def _update_raw_snapshot(self, camera_id: str, frame: object) -> None:
         color = getattr(frame, "color", None)
@@ -227,13 +317,13 @@ class CameraStreamManager:
         require_depth: bool = False,
         max_attempts: int = 8,
     ) -> RawFrameSnapshot | None:
-        target = next((camera for camera in self._cameras if camera.camera_id == camera_id), None)
+        target = self._camera_by_id.get(camera_id)
         if target is None:
             return None
 
         attempts = max(1, int(max_attempts))
         for _ in range(attempts):
-            with self._capture_lock:
+            with self._camera_locks[camera_id]:
                 frame = target.get_frame(timeout_ms=timeout_ms)
             if frame is None:
                 continue
@@ -254,6 +344,71 @@ class CameraStreamManager:
 
         return None
 
+    def synchronized_raw_snapshots(
+        self,
+        camera_ids: list[str],
+        *,
+        require_depth: bool = False,
+        max_skew_ms: float = 75.0,
+        timeout_ms: int = 1200,
+    ) -> dict[str, RawFrameSnapshot]:
+        selected = [camera_id for camera_id in camera_ids if camera_id in self._camera_by_id]
+        if not selected:
+            return {}
+
+        deadline = time.perf_counter() + max(0.05, float(timeout_ms) / 1000.0)
+        target_skew_s = max(0.0, float(max_skew_ms) / 1000.0)
+        best_batch: dict[str, RawFrameSnapshot] = {}
+        best_skew_s = float("inf")
+
+        while time.perf_counter() < deadline:
+            with self._lock:
+                batch = {
+                    camera_id: self._clone_raw_snapshot(self._raw_snapshots.get(camera_id))
+                    for camera_id in selected
+                }
+
+            if any(snapshot is None for snapshot in batch.values()):
+                time.sleep(0.01)
+                continue
+
+            snapshots = {camera_id: snapshot for camera_id, snapshot in batch.items() if snapshot is not None}
+            if require_depth and any(snapshot.depth is None for snapshot in snapshots.values()):
+                time.sleep(0.01)
+                continue
+
+            timestamps = [snapshot.timestamp_s for snapshot in snapshots.values()]
+            skew_s = max(timestamps) - min(timestamps)
+            if skew_s < best_skew_s:
+                best_skew_s = skew_s
+                best_batch = snapshots
+            if skew_s <= target_skew_s:
+                return snapshots
+            time.sleep(0.01)
+
+        if best_batch:
+            return best_batch
+
+        direct_captures: dict[str, RawFrameSnapshot] = {}
+        with ThreadPoolExecutor(max_workers=len(selected)) as executor:
+            futures = {
+                executor.submit(
+                    self.capture_raw_frame,
+                    camera_id,
+                    max(100, min(400, timeout_ms // 2)),
+                    require_depth,
+                    3,
+                ): camera_id
+                for camera_id in selected
+            }
+            for future in as_completed(futures):
+                camera_id = futures[future]
+                snapshot = future.result()
+                if snapshot is not None and (not require_depth or snapshot.depth is not None):
+                    direct_captures[camera_id] = snapshot
+
+        return direct_captures
+
     def intrinsics(self, camera_id: str) -> np.ndarray | None:
         return self._intrinsics.get(camera_id)
 
@@ -270,12 +425,25 @@ class CameraStreamManager:
 
     def get_latest_raw_snapshot(self, camera_id: str, *, require_depth: bool = False) -> RawFrameSnapshot | None:
         with self._lock:
-            snapshot = self._raw_snapshots.get(camera_id)
+            snapshot = self._clone_raw_snapshot(self._raw_snapshots.get(camera_id))
         if snapshot is None:
             return None
         if require_depth and snapshot.depth is None:
             return None
         return snapshot
+
+    @staticmethod
+    def _clone_raw_snapshot(snapshot: RawFrameSnapshot | None) -> RawFrameSnapshot | None:
+        if snapshot is None:
+            return None
+        return RawFrameSnapshot(
+            camera_id=snapshot.camera_id,
+            frame_index=int(snapshot.frame_index),
+            timestamp_s=float(snapshot.timestamp_s),
+            color=None if snapshot.color is None else snapshot.color.copy(),
+            depth=None if snapshot.depth is None else snapshot.depth.copy(),
+            depth_scale_m=None if snapshot.depth_scale_m is None else float(snapshot.depth_scale_m),
+        )
 
     def camera_details(self) -> list[dict[str, str | int | bool]]:
         details: list[dict[str, str | int | bool]] = []

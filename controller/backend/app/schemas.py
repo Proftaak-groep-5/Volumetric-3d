@@ -56,3 +56,11 @@ class CreateVolumetricCaptureResponse(BaseModel):
     points_per_camera: dict[str, int]
     cameras_used: list[str]
     debug: dict[str, Any] | None = None
+
+
+class ConfigureNetworkCamerasRequest(BaseModel):
+    camera_ids: list[str] | None = None
+
+
+class ConfigureNetworkCamerasResponse(BaseModel):
+    results: dict[str, dict[str, Any]]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import signal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,9 +33,10 @@ app.mount(
     name="captures",
 )
 
+def _startup_app() -> None:
+    if getattr(app.state, "_startup_complete", False):
+        return
 
-@app.on_event("startup")
-def startup() -> None:
     calibration_store = CalibrationStore(settings.calibration_file)
     calibration_store.load()
 
@@ -63,16 +65,49 @@ def startup() -> None:
         calibration_store,
         output_dir=settings.volumetric_capture_output_dir,
     )
+    app.state._startup_complete = True
+
+
+def _shutdown_app() -> None:
+    if not getattr(app.state, "_startup_complete", False):
+        return
+
+    manager = getattr(app.state, "camera_manager", None)
+    if manager is not None:
+        try:
+            manager.stop()
+        except Exception:
+            LOGGER.exception("Failed to stop camera manager cleanly")
+    app.state._startup_complete = False
+
+
+@app.on_event("startup")
+def startup() -> None:
+    _startup_app()
 
 
 @app.on_event("shutdown")
 def shutdown() -> None:
-    manager = getattr(app.state, "camera_manager", None)
-    if manager is not None:
-        manager.stop()
+    _shutdown_app()
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
+    def _request_exit(signum: int, _frame: object) -> None:
+        LOGGER.info("Received signal %s, shutting down controller backend", signum)
+        _shutdown_app()
+        raise KeyboardInterrupt
+
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, _request_exit)
+    signal.signal(signal.SIGTERM, _request_exit)
+    try:
+        uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
+    except KeyboardInterrupt:
+        LOGGER.info("Controller backend stopped")
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        _shutdown_app()

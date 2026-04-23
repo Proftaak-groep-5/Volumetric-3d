@@ -13,9 +13,9 @@
         "back": 1,
         "bottom": 2
     },
-    "color_res": "1920x1080",
-    "depth_res": "1024x1024",
-    "fps": 60,
+    "color_res": "3840x2160",
+    "depth_res": "640x576",
+    "fps": 30,
     "camera": {
         "color_auto_exposure": false,
         "color_exposure": 120,

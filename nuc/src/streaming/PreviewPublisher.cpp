@@ -1,5 +1,6 @@
 #include "streaming/PreviewPublisher.hpp"
 
+#include "util/ImageIO.hpp"
 #include "util/Log.hpp"
 
 #include <algorithm>
@@ -35,6 +36,7 @@ struct PreviewPublisher::Impl {
     uint64_t droppedBusy = 0;
     uint64_t droppedInvalidSize = 0;
     uint64_t droppedEncode = 0;
+    bool softwareFallback = false;
 };
 
 PreviewPublisher::PreviewPublisher(std::string name) : impl_(std::make_unique<Impl>()), name_(std::move(name)) {}
@@ -51,27 +53,49 @@ bool PreviewPublisher::start(int width, int height, int fps, int quality) {
     impl_->quality = quality;
 #if !NUC_HAS_GSTREAMER
     (void)quality;
-    log::get()->warn("event=preview state=disabled stream={} reason=no_gstreamer_build", name_);
-    return false;
+    impl_->softwareFallback = true;
+    impl_->started = true;
+    impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
+    impl_->lastDropLogAt = std::chrono::steady_clock::now();
+    log::get()->warn("event=preview state=started stream={} mode=software_jpeg reason=no_gstreamer_build", name_);
+    return true;
 #else
     static std::once_flag gstOnce;
     std::call_once(gstOnce, [] {
         gst_init(nullptr, nullptr);
     });
 
+    const auto startSoftwareFallback = [this, width, height, fps](const char *reason) {
+        impl_->softwareFallback = true;
+        impl_->started = true;
+        impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
+        impl_->lastDropLogAt = std::chrono::steady_clock::now();
+        log::get()->warn(
+            "event=preview state=started stream={} mode=software_jpeg reason={}",
+            name_,
+            reason);
+        log::get()->info(
+            "event=preview state=started stream={} width={} height={} fps={} queue_max_buffers=0 transport=jpeg-websocket",
+            name_,
+            width,
+            height,
+            fps);
+        return true;
+    };
+
     if(auto *factory = gst_element_factory_find("jpegenc")) {
         gst_object_unref(factory);
     }
     else {
         log::get()->error("event=preview state=start_failed stream={} reason=missing_plugin plugin=jpegenc hint=GST_PLUGIN_PATH", name_);
-        return false;
+        return startSoftwareFallback("missing_plugin_jpegenc");
     }
     if(auto *factory = gst_element_factory_find("videoconvert")) {
         gst_object_unref(factory);
     }
     else {
         log::get()->error("event=preview state=start_failed stream={} reason=missing_plugin plugin=videoconvert hint=GST_PLUGIN_PATH", name_);
-        return false;
+        return startSoftwareFallback("missing_plugin_videoconvert");
     }
 
     const std::string pipelineText =
@@ -88,22 +112,23 @@ bool PreviewPublisher::start(int width, int height, int fps, int quality) {
         if(error) {
             g_error_free(error);
         }
-        return false;
+        return startSoftwareFallback("pipeline_create_failed");
     }
     impl_->appsrc = gst_bin_get_by_name(GST_BIN(impl_->pipeline), "src");
     impl_->appsink = gst_bin_get_by_name(GST_BIN(impl_->pipeline), "sink");
     if(!impl_->appsrc || !impl_->appsink) {
         log::get()->error("event=preview state=start_failed stream={} reason=missing_appsrc_or_sink", name_);
         stop();
-        return false;
+        return startSoftwareFallback("missing_appsrc_or_sink");
     }
     const auto stateChange = gst_element_set_state(impl_->pipeline, GST_STATE_PLAYING);
     if(stateChange == GST_STATE_CHANGE_FAILURE) {
         log::get()->error("event=preview state=start_failed stream={} reason=state_change_failure", name_);
         stop();
-        return false;
+        return startSoftwareFallback("state_change_failure");
     }
     impl_->started = true;
+    impl_->softwareFallback = false;
     impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
     impl_->lastDropLogAt = std::chrono::steady_clock::now();
     log::get()->info("event=preview state=started stream={} width={} height={} fps={} queue_max_buffers=2 transport=jpeg-websocket", name_, width, height,
@@ -136,6 +161,7 @@ void PreviewPublisher::stop() {
     }
 #endif
     impl_->started = false;
+    impl_->softwareFallback = false;
     if(shouldLog) {
         log::get()->info("event=preview state=stopped stream={}", name_);
     }
@@ -177,6 +203,28 @@ bool PreviewPublisher::pushRgbFrame(const uint8_t *data, std::size_t bytes, uint
         ++impl_->droppedBusy;
         logDropSummary("busy");
         return false;
+    }
+    if(impl_->softwareFallback) {
+        const auto started = std::chrono::steady_clock::now();
+        auto bytesOut = imageio::encodeRgbJpeg(data, impl_->width, impl_->height, impl_->quality);
+        if(!bytesOut || bytesOut->empty()) {
+            ++impl_->droppedEncode;
+            logDropSummary("software_encode");
+            return false;
+        }
+
+        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        FrameCallback callback;
+        {
+            std::scoped_lock lock(mutex_);
+            latestJpeg_ = bytesOut;
+            callback = callback_;
+        }
+        impl_->nextFrameAt = now + interval;
+        if(callback) {
+            callback(bytesOut, timestampUs, elapsedMs);
+        }
+        return true;
     }
 #if !NUC_HAS_GSTREAMER
     (void)data;

@@ -15,6 +15,8 @@ from app.api.deps import (
 from app.schemas import (
     CameraInfo,
     CameraListResponse,
+    ConfigureNetworkCamerasRequest,
+    ConfigureNetworkCamerasResponse,
     CreateVolumetricCaptureRequest,
     CreateVolumetricCaptureResponse,
     CreateVolumetricPointRequest,
@@ -54,6 +56,15 @@ def list_cameras(camera_manager: Annotated[CameraStreamManager, Depends(get_came
         )
 
     return CameraListResponse(cameras=cameras)
+
+
+@router.post("/cameras/configure-network", responses={400: {"description": "Failed to configure one or more network cameras"}})
+def configure_network_cameras(
+    payload: ConfigureNetworkCamerasRequest,
+    camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)],
+) -> ConfigureNetworkCamerasResponse:
+    results = camera_manager.configure_network_camera_streams(payload.camera_ids)
+    return ConfigureNetworkCamerasResponse(results=results)
 
 
 @router.get("/frame/{camera_id}.jpg", responses={404: {"description": "No frame available for camera"}})

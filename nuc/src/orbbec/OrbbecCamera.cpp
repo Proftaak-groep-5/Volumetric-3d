@@ -197,6 +197,13 @@ nlohmann::json OrbbecCamera::settingsJson() const {
         { "contrast", runtimeSettings_.colorContrast ? nlohmann::json(*runtimeSettings_.colorContrast) : nlohmann::json(nullptr) },
         { "saturation", runtimeSettings_.colorSaturation ? nlohmann::json(*runtimeSettings_.colorSaturation) : nlohmann::json(nullptr) },
     };
+    settings["depth"] = {
+        { "enabled", config_.depth.enabled },
+        { "width", config_.depth.width },
+        { "height", config_.depth.height },
+        { "fps", config_.depth.fps },
+        { "align_to_color", config_.depth.alignToColor },
+    };
     settings["depth_preview"] = {
         { "enabled", runtimeSettings_.depthPreviewEnabled },
         { "min_depth_mm", runtimeSettings_.depthPreviewMinMm },
@@ -411,6 +418,35 @@ nlohmann::json OrbbecCamera::applySettings(const nlohmann::json &patch) {
         }
     }
 
+    if(patch.contains("depth")) {
+        const auto &depth = patch.at("depth");
+        if(depth.contains("enabled")) {
+            config_.depth.enabled = depth.at("enabled").get<bool>();
+            applied.push_back("depth.enabled");
+            restartRequired = true;
+        }
+        if(depth.contains("width")) {
+            config_.depth.width = depth.at("width").get<int>();
+            restartRequired = true;
+            applied.push_back("depth.width");
+        }
+        if(depth.contains("height")) {
+            config_.depth.height = depth.at("height").get<int>();
+            restartRequired = true;
+            applied.push_back("depth.height");
+        }
+        if(depth.contains("fps")) {
+            config_.depth.fps = depth.at("fps").get<int>();
+            restartRequired = true;
+            applied.push_back("depth.fps");
+        }
+        if(depth.contains("align_to_color")) {
+            config_.depth.alignToColor = depth.at("align_to_color").get<bool>();
+            restartRequired = true;
+            applied.push_back("depth.align_to_color");
+        }
+    }
+
     if(patch.contains("authoritative_depth")) {
         const auto &depthBinary = patch.at("authoritative_depth");
         if(depthBinary.contains("enabled")) {
@@ -428,14 +464,52 @@ nlohmann::json OrbbecCamera::applySettings(const nlohmann::json &patch) {
         restartRequested_ = true;
     }
 
-    const auto settings = settingsJson();
-
     return {
         { "ok", errors.empty() },
         { "restart_required", restartRequired },
         { "applied", applied },
         { "errors", errors },
-        { "settings", settings },
+        { "settings",
+          {
+              { "color",
+                {
+                    { "enabled", runtimeSettings_.colorEnabled },
+                    { "width", config_.color.width },
+                    { "height", config_.color.height },
+                    { "fps", config_.color.fps },
+                    { "target_bitrate_mbps", config_.color.targetBitrateMbps },
+                    { "exposure_auto", runtimeSettings_.colorExposureAuto },
+                    { "exposure_value", runtimeSettings_.colorExposureValue ? nlohmann::json(*runtimeSettings_.colorExposureValue) : nlohmann::json(nullptr) },
+                    { "gain", runtimeSettings_.colorGain ? nlohmann::json(*runtimeSettings_.colorGain) : nlohmann::json(nullptr) },
+                    { "white_balance_auto", runtimeSettings_.colorWhiteBalanceAuto },
+                    { "white_balance_value", runtimeSettings_.colorWhiteBalanceValue ? nlohmann::json(*runtimeSettings_.colorWhiteBalanceValue) : nlohmann::json(nullptr) },
+                    { "brightness", runtimeSettings_.colorBrightness ? nlohmann::json(*runtimeSettings_.colorBrightness) : nlohmann::json(nullptr) },
+                    { "contrast", runtimeSettings_.colorContrast ? nlohmann::json(*runtimeSettings_.colorContrast) : nlohmann::json(nullptr) },
+                    { "saturation", runtimeSettings_.colorSaturation ? nlohmann::json(*runtimeSettings_.colorSaturation) : nlohmann::json(nullptr) },
+                } },
+              { "depth",
+                {
+                    { "enabled", config_.depth.enabled },
+                    { "width", config_.depth.width },
+                    { "height", config_.depth.height },
+                    { "fps", config_.depth.fps },
+                    { "align_to_color", config_.depth.alignToColor },
+                } },
+              { "depth_preview",
+                {
+                    { "enabled", runtimeSettings_.depthPreviewEnabled },
+                    { "min_depth_mm", runtimeSettings_.depthPreviewMinMm },
+                    { "max_depth_mm", runtimeSettings_.depthPreviewMaxMm },
+                    { "target_bitrate_mbps", config_.depthPreview.targetBitrateMbps },
+                    { "mode", config_.depthPreview.mode },
+                } },
+              { "authoritative_depth",
+                {
+                    { "enabled", runtimeSettings_.depthBinaryEnabled },
+                    { "compression", config_.depthBinary.compression },
+                    { "compression_level", config_.depthBinary.compressionLevel },
+                } },
+          } },
     };
 }
 

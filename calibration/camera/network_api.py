@@ -113,6 +113,28 @@ def _http_json(url: str, *, timeout_s: float) -> dict[str, Any]:
         return json.loads(response.read().decode(charset))
 
 
+def _http_json_request(
+    url: str,
+    *,
+    timeout_s: float,
+    method: str,
+    payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = None
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "volumetric-3d-network-camera/1.0",
+    }
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    request = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:
+        charset = response.headers.get_content_charset("utf-8")
+        return json.loads(response.read().decode(charset))
+
+
 def _http_bytes(url: str, *, timeout_s: float) -> tuple[bytes, Mapping[str, str]]:
     request = urllib.request.Request(url, headers={"User-Agent": "volumetric-3d-network-camera/1.0"})
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
@@ -238,6 +260,80 @@ class NetworkApiCamera(CameraDevice):
         if self._depth_to_color_transform is None:
             return None
         return self._depth_to_color_transform.copy()
+
+    def apply_stream_configuration(
+        self,
+        *,
+        color_width: int,
+        color_height: int,
+        depth_width: int,
+        depth_height: int,
+        fps: int,
+        align_to_color: bool | None = None,
+    ) -> dict[str, Any]:
+        timeout_s = max(0.1, float(self._timeout_ms) / 1000.0)
+        payload: dict[str, Any] = {
+            "color": {
+                "width": int(color_width),
+                "height": int(color_height),
+                "fps": int(fps),
+            },
+            "depth": {
+                "width": int(depth_width),
+                "height": int(depth_height),
+                "fps": int(fps),
+            },
+        }
+        if align_to_color is not None:
+            payload["depth"]["align_to_color"] = bool(align_to_color)
+
+        response = _http_json_request(
+            f"{self._base_url}/settings",
+            timeout_s=timeout_s,
+            method="POST",
+            payload=payload,
+        )
+        if not bool(response.get("ok", False)):
+            raise RuntimeError(f"Failed to update network camera settings for {self._camera_id}: {response}")
+
+        if bool(response.get("restart_required", False)):
+            _http_json_request(
+                f"{self._base_url}/settings/restart-streams",
+                timeout_s=max(timeout_s, 1.0),
+                method="POST",
+                payload={},
+            )
+            time.sleep(1.0)
+
+        self.refresh_metadata()
+        return response
+
+    def refresh_metadata(self) -> None:
+        timeout_s = max(0.1, float(self._timeout_ms) / 1000.0)
+        metadata = _http_json(f"{self._base_url}/metadata", timeout_s=max(timeout_s, 1.0))
+        calibration = metadata.get("calibration")
+        if not isinstance(calibration, Mapping):
+            raise RuntimeError(f"Network camera {self._camera_id} returned no calibration metadata after restart")
+
+        color_intrinsics = _intrinsics_from_payload(
+            calibration.get("color_intrinsic") if calibration.get("color_intrinsic") is not None else calibration.get("color")
+        )
+        if color_intrinsics is None:
+            raise RuntimeError(f"Network camera {self._camera_id} returned invalid color intrinsics after restart")
+
+        depth_intrinsics = _intrinsics_from_payload(
+            calibration.get("depth_intrinsic") if calibration.get("depth_intrinsic") is not None else calibration.get("depth")
+        )
+        depth_to_color_transform = _depth_to_color_transform_from_payload(
+            calibration.get("depth_to_color_extrinsic")
+            if calibration.get("depth_to_color_extrinsic") is not None
+            else calibration.get("depth_to_color")
+        )
+
+        self._intrinsics = color_intrinsics
+        self._depth_intrinsics = depth_intrinsics
+        self._depth_to_color_transform = None if depth_to_color_transform is None else np.asarray(depth_to_color_transform, dtype=np.float64)
+        self._depth_scale_m = _depth_scale_to_meters(metadata.get("depth_scale"))
 
     def get_frame(self, timeout_ms: int = 1000) -> CameraFrame | None:
         if not self._started:

@@ -52,6 +52,12 @@ class VolumetricCaptureService:
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         selected_camera_ids = camera_ids or self._camera_manager.camera_ids()
+        synchronized_frames = self._camera_manager.synchronized_raw_snapshots(
+            selected_camera_ids,
+            require_depth=True,
+            max_skew_ms=75.0,
+            timeout_ms=1200,
+        )
         pixel_step_value = max(1, int(pixel_step if pixel_step is not None else self._pixel_step))
         depth_min_value = float(self._depth_min_m if depth_min_m is None else depth_min_m)
         depth_max_value = float(self._depth_max_m if depth_max_m is None else depth_max_m)
@@ -70,6 +76,7 @@ class VolumetricCaptureService:
         for camera_id in selected_camera_ids:
             world_points, colors, skip_reason = self._capture_world_points_for_camera(
                 camera_id,
+                frame=synchronized_frames.get(camera_id),
                 pixel_step=pixel_step_value,
                 depth_min_m=depth_min_value,
                 depth_max_m=depth_max_value,
@@ -113,6 +120,7 @@ class VolumetricCaptureService:
         self,
         camera_id: str,
         *,
+        frame: RawFrameSnapshot | None,
         pixel_step: int,
         depth_min_m: float,
         depth_max_m: float,
@@ -123,14 +131,10 @@ class VolumetricCaptureService:
             stats["no_calibration"] += 1
             return None, None, f"{camera_id}: missing calibration entry"
 
-        frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
         if frame is None:
-            frame = self._camera_manager.capture_raw_frame(
-                camera_id,
-                require_depth=True,
-                timeout_ms=600,
-                max_attempts=12,
-            )
+            frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
+        if frame is None:
+            frame = self._camera_manager.capture_raw_frame(camera_id, require_depth=True, timeout_ms=600, max_attempts=12)
         if frame is None or frame.depth is None:
             stats["no_depth_frame"] += 1
             return None, None, f"{camera_id}: depth frame unavailable"
