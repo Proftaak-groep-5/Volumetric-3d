@@ -43,6 +43,10 @@ frontend/build/
 .env.test.local
 .env.production.local
 
+# Next.js
+.next/
+out/
+
 # IDE
 .vscode/
 .idea/
