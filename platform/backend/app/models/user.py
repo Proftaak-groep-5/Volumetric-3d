@@ -1,21 +1,19 @@
 from datetime import datetime
-import uuid 
-from sqlalchemy import String, Boolean, DateTime, Column, Integer, Text
+import uuid
+
+import sqlalchemy.types
+from sqlalchemy import String, Boolean, DateTime, Column, Integer, Text, types
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base, Mapped, mapped_column
-
-
-Base = declarative_base()
+from sqlalchemy.orm import Mapped, mapped_column
+from ..core.database import Base
 
 class User(Base):
     __tablename__ = "userdata"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    uuid: Mapped[uuid.UUID] = mapped_column(
+    userid: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        unique=True,
-        default=uuid.uuid4,
-        index=True
+        primary_key=True,
+        default=uuid.uuid4
     )
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
