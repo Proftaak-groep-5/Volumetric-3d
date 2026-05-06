@@ -1,0 +1,51 @@
+{
+  "instance_id": "femtobolt-nuc-01",
+  "bind_address": "0.0.0.0",
+  "http_port": 8080,
+  "log_level": "info",
+  "camera": {
+    "serial_number": "",
+    "auto_open_first_femto_bolt": true,
+    "enable_global_timestamp": true,
+    "retry_interval_ms": 2000
+  },
+  "streams": {
+    "color": {
+      "enabled": true,
+      "width": 1280,
+      "height": 720,
+      "fps": 15,
+      "target_bitrate_mbps": 4
+    },
+    "depth": {
+      "enabled": true,
+      "width": 640,
+      "height": 576,
+      "fps": 15,
+      "align_to_color": false
+    },
+    "depth_preview": {
+      "enabled": true,
+      "target_bitrate_mbps": 2,
+      "mode": "false_color",
+      "min_depth_mm": 250,
+      "max_depth_mm": 4000
+    },
+    "authoritative_depth": {
+      "enabled": true,
+      "compression": "zstd",
+      "compression_level": 3
+    }
+  },
+  "discovery": {
+    "enabled": true,
+    "service_type": "urn:orbbec-femtobolt-nuc:service:1",
+    "announcement_interval_sec": 30
+  },
+  "synthetic_input": {
+    "enabled": true,
+    "use_when_no_camera": true,
+    "force_no_camera": false,
+    "depth_scale": 1.0
+  }
+}
