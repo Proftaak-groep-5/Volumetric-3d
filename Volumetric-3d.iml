@@ -8,11 +8,4 @@
     <orderEntry type="jdk" jdkName="Python 3.10 (Volumetric-3d) (2)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
-  <component name="PyNamespacePackagesService">
-    <option name="namespacePackageFolders">
-      <list>
-        <option value="$MODULE_DIR$/platform" />
-      </list>
-    </option>
-  </component>
 </module>
