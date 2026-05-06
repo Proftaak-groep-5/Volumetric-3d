@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: VolCap3D1234!
+      POSTGRES_DB: testdb
+    ports:
+      - "5432:5432"
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: john@doe.com
+      PGADMIN_DEFAULT_PASSWORD: VolCap3D1234!
+    ports:
+      - "8080:80"
+volumes:
+  postgres_data:
+    driver: local
