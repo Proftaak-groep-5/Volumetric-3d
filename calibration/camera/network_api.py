@@ -425,6 +425,14 @@ def _candidate_addresses(config: NetworkCameraDiscoveryConfig) -> list[tuple[str
     addresses: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = set()
 
+    # Always probe local loopback endpoints so host-local camera services are reachable via network API.
+    for loopback_host in ("127.0.0.1", "localhost"):
+        for port in config.ports:
+            candidate = (loopback_host, int(port))
+            if candidate not in seen:
+                seen.add(candidate)
+                addresses.append(candidate)
+
     for ip in config.ips:
         for port in config.ports:
             candidate = (ip, int(port))
