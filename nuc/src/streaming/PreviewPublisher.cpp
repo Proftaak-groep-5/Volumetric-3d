@@ -31,6 +31,8 @@ struct PreviewPublisher::Impl {
     bool started = false;
     std::chrono::steady_clock::time_point nextFrameAt {};
     std::chrono::steady_clock::time_point lastDropLogAt {};
+    uint64_t nextFrameTimestampUs = 0;
+    uint64_t lastFrameTimestampUs = 0;
     std::mutex pushMutex;
     uint64_t droppedRateLimit = 0;
     uint64_t droppedBusy = 0;
@@ -57,6 +59,8 @@ bool PreviewPublisher::start(int width, int height, int fps, int quality) {
     impl_->started = true;
     impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
     impl_->lastDropLogAt = std::chrono::steady_clock::now();
+    impl_->nextFrameTimestampUs = 0;
+    impl_->lastFrameTimestampUs = 0;
     log::get()->warn("event=preview state=started stream={} mode=software_jpeg reason=no_gstreamer_build", name_);
     return true;
 #else
@@ -70,6 +74,8 @@ bool PreviewPublisher::start(int width, int height, int fps, int quality) {
         impl_->started = true;
         impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
         impl_->lastDropLogAt = std::chrono::steady_clock::now();
+        impl_->nextFrameTimestampUs = 0;
+        impl_->lastFrameTimestampUs = 0;
         log::get()->warn(
             "event=preview state=started stream={} mode=software_jpeg reason={}",
             name_,
@@ -131,6 +137,8 @@ bool PreviewPublisher::start(int width, int height, int fps, int quality) {
     impl_->softwareFallback = false;
     impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
     impl_->lastDropLogAt = std::chrono::steady_clock::now();
+    impl_->nextFrameTimestampUs = 0;
+    impl_->lastFrameTimestampUs = 0;
     log::get()->info("event=preview state=started stream={} width={} height={} fps={} queue_max_buffers=2 transport=jpeg-websocket", name_, width, height,
                      fps);
     return true;
@@ -192,11 +200,30 @@ bool PreviewPublisher::pushRgbFrame(const uint8_t *data, std::size_t bytes, uint
         return false;
     }
     const auto now = std::chrono::steady_clock::now();
-    const auto interval = std::chrono::microseconds(1'000'000 / std::max(1, impl_->fps));
-    if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
-        ++impl_->droppedRateLimit;
-        logDropSummary("rate_limit");
-        return false;
+    const auto intervalUs = static_cast<uint64_t>(1'000'000 / std::max(1, impl_->fps));
+    const auto interval = std::chrono::microseconds(intervalUs);
+    constexpr uint64_t kTimestampToleranceUs = 2000;
+
+    // Prefer sensor timestamps for frame pacing because steady_clock granularity on Windows
+    // can be coarse enough to cause false positives and halve the effective preview FPS.
+    bool usedTimestampRateLimit = false;
+    if(timestampUs > 0) {
+        if(impl_->lastFrameTimestampUs > 0 && timestampUs + intervalUs < impl_->lastFrameTimestampUs) {
+            impl_->nextFrameTimestampUs = 0;
+        }
+        if(impl_->nextFrameTimestampUs > 0 && timestampUs + kTimestampToleranceUs < impl_->nextFrameTimestampUs) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
+        usedTimestampRateLimit = true;
+    }
+    if(!usedTimestampRateLimit) {
+        if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
     }
     std::unique_lock pushLock(impl_->pushMutex, std::try_to_lock);
     if(!pushLock.owns_lock()) {
@@ -220,7 +247,21 @@ bool PreviewPublisher::pushRgbFrame(const uint8_t *data, std::size_t bytes, uint
             latestJpeg_ = bytesOut;
             callback = callback_;
         }
-        impl_->nextFrameAt = now + interval;
+        if(usedTimestampRateLimit) {
+            if(impl_->nextFrameTimestampUs == 0 || timestampUs > impl_->nextFrameTimestampUs + intervalUs * 4) {
+                impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+            }
+            else {
+                impl_->nextFrameTimestampUs += intervalUs;
+                if(impl_->nextFrameTimestampUs <= timestampUs) {
+                    impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+                }
+            }
+            impl_->lastFrameTimestampUs = timestampUs;
+        }
+        else {
+            impl_->nextFrameAt = now + interval;
+        }
         if(callback) {
             callback(bytesOut, timestampUs, elapsedMs);
         }
@@ -280,7 +321,21 @@ bool PreviewPublisher::pushRgbFrame(const uint8_t *data, std::size_t bytes, uint
         latestJpeg_ = bytesOut;
         callback = callback_;
     }
-    impl_->nextFrameAt = now + interval;
+    if(usedTimestampRateLimit) {
+        if(impl_->nextFrameTimestampUs == 0 || timestampUs > impl_->nextFrameTimestampUs + intervalUs * 4) {
+            impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+        }
+        else {
+            impl_->nextFrameTimestampUs += intervalUs;
+            if(impl_->nextFrameTimestampUs <= timestampUs) {
+                impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+            }
+        }
+        impl_->lastFrameTimestampUs = timestampUs;
+    }
+    else {
+        impl_->nextFrameAt = now + interval;
+    }
     if(callback) {
         callback(bytesOut, timestampUs, elapsedMs);
     }
@@ -303,11 +358,28 @@ bool PreviewPublisher::pushJpegFrame(std::shared_ptr<const std::vector<uint8_t>>
         return false;
     }
     const auto now = std::chrono::steady_clock::now();
-    const auto interval = std::chrono::microseconds(1'000'000 / std::max(1, impl_->fps));
-    if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
-        ++impl_->droppedRateLimit;
-        logDropSummary("rate_limit");
-        return false;
+    const auto intervalUs = static_cast<uint64_t>(1'000'000 / std::max(1, impl_->fps));
+    const auto interval = std::chrono::microseconds(intervalUs);
+    constexpr uint64_t kTimestampToleranceUs = 2000;
+
+    bool usedTimestampRateLimit = false;
+    if(timestampUs > 0) {
+        if(impl_->lastFrameTimestampUs > 0 && timestampUs + intervalUs < impl_->lastFrameTimestampUs) {
+            impl_->nextFrameTimestampUs = 0;
+        }
+        if(impl_->nextFrameTimestampUs > 0 && timestampUs + kTimestampToleranceUs < impl_->nextFrameTimestampUs) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
+        usedTimestampRateLimit = true;
+    }
+    if(!usedTimestampRateLimit) {
+        if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
     }
     std::unique_lock pushLock(impl_->pushMutex, std::try_to_lock);
     if(!pushLock.owns_lock()) {
@@ -322,7 +394,21 @@ bool PreviewPublisher::pushJpegFrame(std::shared_ptr<const std::vector<uint8_t>>
         latestJpeg_ = jpeg;
         callback = callback_;
     }
-    impl_->nextFrameAt = now + interval;
+    if(usedTimestampRateLimit) {
+        if(impl_->nextFrameTimestampUs == 0 || timestampUs > impl_->nextFrameTimestampUs + intervalUs * 4) {
+            impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+        }
+        else {
+            impl_->nextFrameTimestampUs += intervalUs;
+            if(impl_->nextFrameTimestampUs <= timestampUs) {
+                impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+            }
+        }
+        impl_->lastFrameTimestampUs = timestampUs;
+    }
+    else {
+        impl_->nextFrameAt = now + interval;
+    }
     if(callback) {
         callback(std::move(jpeg), timestampUs, 0.0);
     }

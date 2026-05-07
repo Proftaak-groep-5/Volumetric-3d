@@ -131,17 +131,46 @@ inline constexpr const char *kIndexHtml = R"HTML(
     const depthImg = document.getElementById("depth");
     let previewFrame = 0;
 
-    function refreshPreview(img, path) {
-      img.src = `${path}?t=${Date.now()}&frame=${previewFrame++}`;
+    function startPreviewPolling(img, path) {
+      function refreshPreview() {
+        img.src = `${path}?t=${Date.now()}&frame=${previewFrame++}`;
+      }
+      refreshPreview();
+      return setInterval(refreshPreview, 66);
     }
 
-    function startPreviewPolling() {
-      refreshPreview(colorImg, "/snapshot/color.jpg");
-      refreshPreview(depthImg, "/snapshot/depth-preview.jpg");
-      setInterval(() => {
-        refreshPreview(colorImg, "/snapshot/color.jpg");
-        refreshPreview(depthImg, "/snapshot/depth-preview.jpg");
-      }, 250);
+    function startPreviewWebSocket(img, wsPath, fallbackPath) {
+      let lastObjectUrl = null;
+      let fallbackTimer = null;
+      const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${wsPath}`);
+      ws.binaryType = "arraybuffer";
+
+      function startFallbackOnce() {
+        if (fallbackTimer !== null) {
+          return;
+        }
+        fallbackTimer = startPreviewPolling(img, fallbackPath);
+      }
+
+      ws.onmessage = (event) => {
+        if (!(event.data instanceof ArrayBuffer)) {
+          return;
+        }
+        const blob = new Blob([event.data], { type: "image/jpeg" });
+        const url = URL.createObjectURL(blob);
+        if (lastObjectUrl) {
+          URL.revokeObjectURL(lastObjectUrl);
+        }
+        lastObjectUrl = url;
+        img.src = url;
+      };
+
+      ws.onerror = () => {
+        startFallbackOnce();
+      };
+      ws.onclose = () => {
+        startFallbackOnce();
+      };
     }
 
     const depthDataWs = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/depth`);
@@ -183,7 +212,8 @@ inline constexpr const char *kIndexHtml = R"HTML(
 
     setInterval(refresh, 2000);
     refresh();
-    startPreviewPolling();
+    startPreviewWebSocket(colorImg, "/ws/preview/color", "/snapshot/color.jpg");
+    startPreviewWebSocket(depthImg, "/ws/preview/depth", "/snapshot/depth-preview.jpg");
   </script>
 </body>
 </html>
