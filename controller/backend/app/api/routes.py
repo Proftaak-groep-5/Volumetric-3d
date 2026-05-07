@@ -115,20 +115,23 @@ async def stream(
         raise HTTPException(status_code=404, detail=f"Camera {camera_id} was not found")
 
     boundary = "frame"
+    frame_interval_s = 1.0 / max(1, camera_manager.target_fps())
 
     async def frame_generator():
+        last_frame_index = -1
         while True:
             if await request.is_disconnected():
                 break
             snapshot = camera_manager.get_snapshot(camera_id)
-            if snapshot is not None and snapshot.jpeg is not None:
+            if snapshot is not None and snapshot.jpeg is not None and snapshot.frame_index != last_frame_index:
                 chunk = (
                     f"--{boundary}\r\n"
                     "Content-Type: image/jpeg\r\n"
                     f"Content-Length: {len(snapshot.jpeg)}\r\n\r\n"
                 ).encode("utf-8")
                 yield chunk + snapshot.jpeg + b"\r\n"
-            await asyncio.sleep(1.0 / 20.0)
+                last_frame_index = snapshot.frame_index
+            await asyncio.sleep(frame_interval_s)
 
     return StreamingResponse(
         frame_generator(),

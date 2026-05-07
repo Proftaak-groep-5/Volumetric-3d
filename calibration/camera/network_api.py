@@ -220,6 +220,10 @@ class NetworkApiCamera(CameraDevice):
         self._frame_index = 0
         self._started = False
 
+    def _next_frame_index(self) -> int:
+        self._frame_index += 1
+        return self._frame_index
+
     @property
     def camera_id(self) -> str:
         return self._camera_id
@@ -410,15 +414,29 @@ class NetworkApiCamera(CameraDevice):
                 LOGGER.debug("Network camera depth fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
                 depth_frame = None
 
-        self._frame_index += 1
+        frame_index = self._next_frame_index()
         return CameraFrame(
             camera_id=self._camera_id,
-            frame_index=self._frame_index,
+            frame_index=frame_index,
             timestamp_ns=time.time_ns(),
             color=color_array,
+            color_jpeg=color_bytes,
             depth=None if depth_frame is None else np.asarray(depth_frame, dtype=np.uint16),
             depth_scale_m=depth_scale_m,
         )
+
+    def get_preview_jpeg(self, timeout_ms: int = 1000) -> tuple[bytes, int] | None:
+        if not self._started:
+            raise RuntimeError(f"Camera {self._camera_id} is not started")
+
+        timeout_s = max(0.05, float(timeout_ms if timeout_ms > 0 else self._timeout_ms) / 1000.0)
+        try:
+            color_bytes, _ = _http_bytes(f"{self._base_url}/snapshot/color.jpg", timeout_s=timeout_s)
+        except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, ValueError) as exc:
+            LOGGER.debug("Network camera preview fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
+            return None
+
+        return color_bytes, self._next_frame_index()
 
 
 def _candidate_addresses(config: NetworkCameraDiscoveryConfig) -> list[tuple[str, int]]:

@@ -260,6 +260,24 @@ class CameraStreamManager:
         sleep_s = max(0.001, 1.0 / max(1, self._fps))
         while self._running:
             loop_started = time.perf_counter()
+            if isinstance(camera, NetworkApiCamera):
+                try:
+                    with self._camera_locks[camera.camera_id]:
+                        preview = camera.get_preview_jpeg(timeout_ms=200)
+                except Exception:
+                    LOGGER.exception("Network camera preview loop failed camera=%s", camera.camera_id)
+                    time.sleep(sleep_s)
+                    continue
+
+                if preview is not None:
+                    jpeg_bytes, frame_index = preview
+                    self._update_jpeg_snapshot_bytes(camera.camera_id, jpeg_bytes, frame_index)
+
+                elapsed_s = time.perf_counter() - loop_started
+                if elapsed_s < sleep_s:
+                    time.sleep(sleep_s - elapsed_s)
+                continue
+
             try:
                 with self._camera_locks[camera.camera_id]:
                     frame = camera.get_frame(timeout_ms=200)
@@ -271,7 +289,12 @@ class CameraStreamManager:
             if frame is not None:
                 self._update_raw_snapshot(camera.camera_id, frame)
                 if frame.color is not None:
-                    self._update_jpeg_snapshot(camera.camera_id, frame.color, frame.frame_index)
+                    self._update_jpeg_snapshot(
+                        camera.camera_id,
+                        frame.color,
+                        frame.frame_index,
+                        source_jpeg=getattr(frame, "color_jpeg", None),
+                    )
 
             elapsed_s = time.perf_counter() - loop_started
             if elapsed_s < sleep_s:
@@ -294,24 +317,52 @@ class CameraStreamManager:
                 depth_scale_m=None if depth_scale_m is None else float(depth_scale_m),
             )
 
-    def _update_jpeg_snapshot(self, camera_id: str, color_frame: np.ndarray, frame_index: int) -> None:
-        success, encoded = cv2.imencode(".jpg", color_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        if not success:
-            return
+    def _update_jpeg_snapshot(
+        self,
+        camera_id: str,
+        color_frame: np.ndarray,
+        frame_index: int,
+        *,
+        source_jpeg: bytes | None = None,
+    ) -> None:
+        encoded_bytes: bytes
+        if source_jpeg:
+            encoded_bytes = source_jpeg
+        else:
+            success, encoded = cv2.imencode(".jpg", color_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not success:
+                return
+            encoded_bytes = encoded.tobytes()
 
         height, width = color_frame.shape[:2]
-        snapshot = CameraSnapshot(
-            jpeg=encoded.tobytes(),
-            frame_index=frame_index,
-            timestamp_s=time.time(),
-            width=int(width),
-            height=int(height),
-        )
+        self._update_jpeg_snapshot_bytes(camera_id, encoded_bytes, frame_index, width=int(width), height=int(height))
+
+    def _update_jpeg_snapshot_bytes(
+        self,
+        camera_id: str,
+        jpeg: bytes,
+        frame_index: int,
+        *,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> None:
         with self._lock:
-            self._snapshots[camera_id] = snapshot
+            previous = self._snapshots.get(camera_id)
+            resolved_width = int(width) if width is not None else (previous.width if previous is not None else self._color_width)
+            resolved_height = int(height) if height is not None else (previous.height if previous is not None else self._color_height)
+            self._snapshots[camera_id] = CameraSnapshot(
+                jpeg=jpeg,
+                frame_index=int(frame_index),
+                timestamp_s=time.time(),
+                width=resolved_width,
+                height=resolved_height,
+            )
 
     def camera_ids(self) -> list[str]:
         return [camera.camera_id for camera in self._cameras]
+
+    def target_fps(self) -> int:
+        return int(self._fps)
 
     def capture_raw_frame(
         self,
@@ -364,6 +415,8 @@ class CameraStreamManager:
         target_skew_s = max(0.0, float(max_skew_ms) / 1000.0)
         best_batch: dict[str, RawFrameSnapshot] = {}
         best_skew_s = float("inf")
+        missing_snapshot_attempts = 0
+        missing_depth_attempts = 0
 
         while time.perf_counter() < deadline:
             with self._lock:
@@ -373,11 +426,17 @@ class CameraStreamManager:
                 }
 
             if any(snapshot is None for snapshot in batch.values()):
+                missing_snapshot_attempts += 1
+                if missing_snapshot_attempts >= 10:
+                    break
                 time.sleep(0.01)
                 continue
 
             snapshots = {camera_id: snapshot for camera_id, snapshot in batch.items() if snapshot is not None}
             if require_depth and any(snapshot.depth is None for snapshot in snapshots.values()):
+                missing_depth_attempts += 1
+                if missing_depth_attempts >= 10:
+                    break
                 time.sleep(0.01)
                 continue
 
