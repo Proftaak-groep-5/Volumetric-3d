@@ -10,7 +10,6 @@ import cv2
 import numpy as np
 
 from calibration.camera.base import CameraDevice
-from calibration.camera.femto_bolt import discover_femto_bolt_cameras
 from calibration.camera.network_api import NetworkApiCamera, NetworkCameraDiscoveryConfig, discover_network_api_cameras
 
 LOGGER = logging.getLogger(__name__)
@@ -87,22 +86,20 @@ class CameraStreamManager:
         self._camera_by_id.clear()
         self._camera_locks.clear()
 
-        usb_cameras = discover_femto_bolt_cameras(
-            color_resolution=(self._color_width, self._color_height),
-            depth_resolution=(self._depth_width, self._depth_height),
-            fps=self._fps,
-            max_cameras=self._max_cameras,
-            use_depth=self._use_depth,
-            allowed_camera_ids=None,
-            camera_tuning=self._camera_tuning,
-        )
         network_cameras = discover_network_api_cameras(
             use_depth=self._use_depth,
             allowed_camera_ids=None,
             discovery_config=self._network_camera,
         )
+        if self._max_cameras > 0 and len(network_cameras) > self._max_cameras:
+            LOGGER.info(
+                "Limiting discovered network cameras to max_cameras=%s (discovered=%s)",
+                self._max_cameras,
+                len(network_cameras),
+            )
+            network_cameras = network_cameras[: self._max_cameras]
         self._configure_network_cameras(network_cameras)
-        self._cameras = [*usb_cameras, *network_cameras]
+        self._cameras = list(network_cameras)
         self._camera_by_id = {camera.camera_id: camera for camera in self._cameras}
         self._camera_locks = {camera.camera_id: threading.Lock() for camera in self._cameras}
 

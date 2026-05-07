@@ -8,7 +8,7 @@ This controller includes:
 ## Architecture
 
 - Backend: `controller/backend`
-  - Discover + start connected USB Femto Bolt cameras and LAN-exposed NUC cameras.
+  - Discover + start network API cameras only (LAN and localhost loopback).
   - Stream MJPEG preview for each camera.
   - Load calibration from `calib_out/final_calibration.json`.
   - Triangulate world-space point from multi-camera 2D observations.
@@ -54,7 +54,7 @@ Optional env vars:
 - `CAPTURE_OUTPUT_URL_PREFIX`
 - `NETWORK_CAMERA_ENABLED`
 - `NETWORK_CAMERA_SUBNET`
-- `NETWORK_CAMERA_IPS` (comma separated explicit NUC IPs)
+- `NETWORK_CAMERA_IPS` (comma separated explicit hosts/IPs; default includes `127.0.0.1,localhost`)
 - `NETWORK_CAMERA_PORTS` (comma separated, default `8080`)
 - `NETWORK_CAMERA_TIMEOUT_MS`
 - `NETWORK_CAMERA_MAX_CAMERAS`

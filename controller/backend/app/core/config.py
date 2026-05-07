@@ -85,7 +85,7 @@ def get_settings() -> Settings:
         {
             "enabled": os.getenv("NETWORK_CAMERA_ENABLED", "true").lower() in {"1", "true", "yes", "on"},
             "subnet": os.getenv("NETWORK_CAMERA_SUBNET", "192.168.137.0/24"),
-            "ips": os.getenv("NETWORK_CAMERA_IPS", ""),
+            "ips": os.getenv("NETWORK_CAMERA_IPS", "127.0.0.1,localhost"),
             "ports": os.getenv("NETWORK_CAMERA_PORTS", "8080"),
             "timeout_ms": os.getenv("NETWORK_CAMERA_TIMEOUT_MS", "350"),
             "max_cameras": os.getenv("NETWORK_CAMERA_MAX_CAMERAS", "16"),
