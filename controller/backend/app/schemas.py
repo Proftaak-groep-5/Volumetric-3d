@@ -64,3 +64,20 @@ class ConfigureNetworkCamerasRequest(BaseModel):
 
 class ConfigureNetworkCamerasResponse(BaseModel):
     results: dict[str, dict[str, Any]]
+
+
+class CalibrationRunStatusResponse(BaseModel):
+    state: str
+    running: bool
+    started_at_utc: str | None = None
+    finished_at_utc: str | None = None
+    return_code: int | None = None
+    message: str | None = None
+    command: list[str] | None = None
+    log_file: str | None = None
+    output_tail: str | None = None
+
+
+class StartCalibrationResponse(BaseModel):
+    accepted: bool
+    status: CalibrationRunStatusResponse

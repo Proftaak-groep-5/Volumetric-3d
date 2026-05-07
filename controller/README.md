@@ -38,6 +38,7 @@ Backend defaults:
 Optional env vars:
 
 - `CALIBRATION_FILE`
+- `CALIBRATION_CONFIG_FILE`
 - `CORS_ALLOWED_ORIGINS` (comma separated)
 - `CAMERA_COLOR_WIDTH`
 - `CAMERA_COLOR_HEIGHT`
@@ -77,8 +78,10 @@ Open: `http://localhost:3000`
 
 - `GET /api/health`
 - `GET /api/cameras`
+- `GET /api/calibration/status`
 - `GET /api/frame/{camera_id}.jpg`
 - `GET /api/stream/{camera_id}.mjpg`
+- `POST /api/calibration/run`
 - `POST /api/volumetric-point`
 - `POST /api/volumetric-capture`
 

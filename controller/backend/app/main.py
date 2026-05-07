@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.config import get_settings
+from app.services.calibration_runner import CalibrationRunnerService
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager
 from app.services.triangulation import TriangulationService
@@ -38,6 +39,11 @@ def _startup_app() -> None:
 
     calibration_store = CalibrationStore(settings.calibration_file)
     calibration_store.load()
+    calibration_runner = CalibrationRunnerService(
+        repo_root=settings.repo_root,
+        calibration_config_file=settings.calibration_config_file,
+        calibration_store=calibration_store,
+    )
 
     camera_manager = CameraStreamManager(
         color_width=settings.color_width,
@@ -57,6 +63,7 @@ def _startup_app() -> None:
         LOGGER.exception("Failed to start camera manager: %s", exc)
 
     app.state.calibration_store = calibration_store
+    app.state.calibration_runner_service = calibration_runner
     app.state.camera_manager = camera_manager
     app.state.triangulation_service = TriangulationService(camera_manager, calibration_store)
     app.state.volumetric_capture_service = VolumetricCaptureService(
@@ -70,6 +77,13 @@ def _startup_app() -> None:
 def _shutdown_app() -> None:
     if not getattr(app.state, "_startup_complete", False):
         return
+
+    calibration_runner = getattr(app.state, "calibration_runner_service", None)
+    if calibration_runner is not None:
+        try:
+            calibration_runner.shutdown()
+        except Exception:
+            LOGGER.exception("Failed to stop calibration runner cleanly")
 
     manager = getattr(app.state, "camera_manager", None)
     if manager is not None:

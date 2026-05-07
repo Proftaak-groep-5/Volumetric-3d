@@ -13,10 +13,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Settings:
+    repo_root: Path
     host: str
     port: int
     cors_allowed_origins: list[str]
     calibration_file: Path
+    calibration_config_file: Path
     color_width: int
     color_height: int
     depth_width: int
@@ -95,10 +97,14 @@ def get_settings() -> Settings:
     network_camera.validate()
 
     return Settings(
+        repo_root=repo_root.resolve(),
         host=os.getenv("HOST", "0.0.0.0"),
         port=int(os.getenv("PORT", "8000")),
         cors_allowed_origins=_parse_origins(os.getenv("CORS_ALLOWED_ORIGINS", origins_default)),
         calibration_file=Path(os.getenv("CALIBRATION_FILE", str(calibration_default))).resolve(),
+        calibration_config_file=Path(
+            os.getenv("CALIBRATION_CONFIG_FILE", str(repo_root / "calibration" / "calibration_config.json"))
+        ).resolve(),
         color_width=int(os.getenv("CAMERA_COLOR_WIDTH", "3840")),
         color_height=int(os.getenv("CAMERA_COLOR_HEIGHT", "2160")),
         depth_width=int(os.getenv("CAMERA_DEPTH_WIDTH", "640")),

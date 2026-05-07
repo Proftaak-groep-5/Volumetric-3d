@@ -8,11 +8,13 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
     get_calibration_store,
+    get_calibration_runner_service,
     get_camera_manager,
     get_triangulation_service,
     get_volumetric_capture_service,
 )
 from app.schemas import (
+    CalibrationRunStatusResponse,
     CameraInfo,
     CameraListResponse,
     ConfigureNetworkCamerasRequest,
@@ -21,7 +23,9 @@ from app.schemas import (
     CreateVolumetricCaptureResponse,
     CreateVolumetricPointRequest,
     CreateVolumetricPointResponse,
+    StartCalibrationResponse,
 )
+from app.services.calibration_runner import CalibrationRunnerService
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager
 from app.services.triangulation import TriangulationService
@@ -33,6 +37,31 @@ router = APIRouter(prefix="/api", tags=["controller"])
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/calibration/status")
+def calibration_status(
+    calibration_runner: Annotated[CalibrationRunnerService, Depends(get_calibration_runner_service)],
+) -> CalibrationRunStatusResponse:
+    snapshot = calibration_runner.status()
+    return CalibrationRunStatusResponse(**snapshot.__dict__)
+
+
+@router.post("/calibration/run", responses={409: {"description": "Calibration is already running"}})
+def run_calibration(
+    calibration_runner: Annotated[CalibrationRunnerService, Depends(get_calibration_runner_service)],
+) -> StartCalibrationResponse:
+    try:
+        snapshot = calibration_runner.start()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return StartCalibrationResponse(
+        accepted=True,
+        status=CalibrationRunStatusResponse(**snapshot.__dict__),
+    )
 
 
 @router.get("/cameras")
