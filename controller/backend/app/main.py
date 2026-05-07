@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import signal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,20 +93,13 @@ def shutdown() -> None:
 if __name__ == "__main__":
     import uvicorn
 
-    def _request_exit(signum: int, _frame: object) -> None:
-        LOGGER.info("Received signal %s, shutting down controller backend", signum)
-        _shutdown_app()
-        raise KeyboardInterrupt
-
-    previous_sigint = signal.getsignal(signal.SIGINT)
-    previous_sigterm = signal.getsignal(signal.SIGTERM)
-    signal.signal(signal.SIGINT, _request_exit)
-    signal.signal(signal.SIGTERM, _request_exit)
     try:
-        uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
+        uvicorn.run(
+            "app.main:app",
+            host=settings.host,
+            port=settings.port,
+            reload=False,
+            timeout_graceful_shutdown=2,
+        )
     except KeyboardInterrupt:
         LOGGER.info("Controller backend stopped")
-    finally:
-        signal.signal(signal.SIGINT, previous_sigint)
-        signal.signal(signal.SIGTERM, previous_sigterm)
-        _shutdown_app()

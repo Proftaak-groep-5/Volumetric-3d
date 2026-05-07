@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
@@ -77,7 +77,11 @@ def frame(camera_id: str, camera_manager: Annotated[CameraStreamManager, Depends
 
 
 @router.get("/stream/{camera_id}.mjpg", responses={404: {"description": "Camera was not found"}})
-async def stream(camera_id: str, camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)]) -> StreamingResponse:
+async def stream(
+    camera_id: str,
+    request: Request,
+    camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)],
+) -> StreamingResponse:
     if camera_id not in camera_manager.camera_ids():
         raise HTTPException(status_code=404, detail=f"Camera {camera_id} was not found")
 
@@ -85,6 +89,8 @@ async def stream(camera_id: str, camera_manager: Annotated[CameraStreamManager, 
 
     async def frame_generator():
         while True:
+            if await request.is_disconnected():
+                break
             snapshot = camera_manager.get_snapshot(camera_id)
             if snapshot is not None and snapshot.jpeg is not None:
                 chunk = (

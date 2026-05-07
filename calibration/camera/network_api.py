@@ -273,6 +273,8 @@ class NetworkApiCamera(CameraDevice):
         camera_tuning: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         timeout_s = max(0.1, float(self._timeout_ms) / 1000.0)
+
+        config_timeout_s = max(timeout_s, 2.0)
         payload: dict[str, Any] = {
             "color": {
                 "width": int(color_width),
@@ -313,7 +315,7 @@ class NetworkApiCamera(CameraDevice):
 
         response = _http_json_request(
             f"{self._base_url}/settings",
-            timeout_s=timeout_s,
+            timeout_s=config_timeout_s,
             method="POST",
             payload=payload,
         )
@@ -323,18 +325,38 @@ class NetworkApiCamera(CameraDevice):
         if bool(response.get("restart_required", False)):
             _http_json_request(
                 f"{self._base_url}/settings/restart-streams",
-                timeout_s=max(timeout_s, 1.0),
+                timeout_s=max(config_timeout_s, 3.0),
                 method="POST",
                 payload={},
             )
-            time.sleep(1.0)
+            # Give the camera pipeline a short settle window before metadata refresh retries.
+            time.sleep(0.5)
 
-        self.refresh_metadata()
+        self.refresh_metadata(timeout_s=max(config_timeout_s, 2.0), retries=5, retry_delay_s=0.25)
         return response
 
-    def refresh_metadata(self) -> None:
-        timeout_s = max(0.1, float(self._timeout_ms) / 1000.0)
-        metadata = _http_json(f"{self._base_url}/metadata", timeout_s=max(timeout_s, 1.0))
+    def refresh_metadata(self, *, timeout_s: float | None = None, retries: int = 1, retry_delay_s: float = 0.0) -> None:
+        request_timeout_s = max(0.1, float(self._timeout_ms) / 1000.0) if timeout_s is None else max(0.1, float(timeout_s))
+        attempts = max(1, int(retries))
+        last_error: Exception | None = None
+        metadata: dict[str, Any] | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                metadata = _http_json(f"{self._base_url}/metadata", timeout_s=request_timeout_s)
+                break
+            except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+                last_error = exc
+                if attempt < attempts:
+                    time.sleep(max(0.0, float(retry_delay_s)))
+                    continue
+                raise RuntimeError(
+                    f"Failed to refresh network camera metadata for {self._camera_id} after {attempts} attempt(s): {exc}"
+                ) from exc
+
+        if metadata is None:
+            if last_error is not None:
+                raise RuntimeError(f"Failed to refresh network camera metadata for {self._camera_id}: {last_error}") from last_error
+            raise RuntimeError(f"Failed to refresh network camera metadata for {self._camera_id}")
         calibration = metadata.get("calibration")
         if not isinstance(calibration, Mapping):
             raise RuntimeError(f"Network camera {self._camera_id} returned no calibration metadata after restart")

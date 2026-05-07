@@ -12,9 +12,9 @@
 namespace femto {
 namespace {
 
-crow::response jsonResponse(const nlohmann::json &json) {
+crow::response jsonResponse(const nlohmann::json &json, int code = 200) {
     crow::response response;
-    response.code = 200;
+    response.code = code;
     response.set_header("Content-Type", "application/json");
     response.body = json.dump(2);
     return response;
@@ -70,7 +70,9 @@ void HttpServer::start(Callbacks callbacks) {
     CROW_ROUTE(app, "/settings").methods(crow::HTTPMethod::Get)([this] { return jsonResponse(callbacks_.settings()); });
     CROW_ROUTE(app, "/settings").methods(crow::HTTPMethod::Post)([this](const crow::request &request) {
         try {
-            return jsonResponse(callbacks_.updateSettings(parseRequestJson(request)));
+            const auto result = callbacks_.updateSettings(parseRequestJson(request));
+            const bool ok = result.value("ok", true);
+            return jsonResponse(result, ok ? 200 : 500);
         }
         catch(const std::exception &ex) {
             crow::response response;
@@ -80,7 +82,11 @@ void HttpServer::start(Callbacks callbacks) {
             return response;
         }
     });
-    CROW_ROUTE(app, "/settings/restart-streams").methods(crow::HTTPMethod::Post)([this] { return jsonResponse(callbacks_.restartStreams()); });
+    CROW_ROUTE(app, "/settings/restart-streams").methods(crow::HTTPMethod::Post)([this] {
+        const auto result = callbacks_.restartStreams();
+        const bool ok = result.value("ok", true);
+        return jsonResponse(result, ok ? 200 : 500);
+    });
     CROW_ROUTE(app, "/capabilities")([this] { return jsonResponse(callbacks_.capabilities()); });
     CROW_ROUTE(app, "/stats")([this] { return jsonResponse(callbacks_.stats()); });
     CROW_ROUTE(app, "/control/reconnect").methods(crow::HTTPMethod::Post)([this] { return jsonResponse(callbacks_.reconnect()); });
