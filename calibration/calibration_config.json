@@ -36,5 +36,6 @@
         "max_cameras": 16,
         "max_workers": 32
     },
+    "warmup_frames": 0,
     "world_origin": "cube_center"
 }
