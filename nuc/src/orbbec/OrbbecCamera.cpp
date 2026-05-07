@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 #if NUC_HAS_ORBBEC
@@ -24,6 +25,25 @@ nlohmann::json profileToJson(int width, int height, int fps, const std::string &
         { "format", format },
     };
 }
+
+#if NUC_HAS_ORBBEC
+int colorProfilePriority(int format) {
+    switch(format) {
+    case OB_FORMAT_MJPEG:
+        return 0;
+    case OB_FORMAT_RGB:
+    case OB_FORMAT_BGR:
+    case OB_FORMAT_BGRA:
+    case OB_FORMAT_RGBA:
+        return 1;
+    case OB_FORMAT_YUYV:
+    case OB_FORMAT_YUY2:
+        return 2;
+    default:
+        return 3;
+    }
+}
+#endif
 
 std::string obFormatToString(int format) {
     switch(format) {
@@ -686,14 +706,18 @@ bool OrbbecCamera::connectLocked() {
                 if(config_.color.enabled) {
                     auto colorProfiles = impl_->pipeline->getStreamProfileList(OB_SENSOR_COLOR);
                     std::shared_ptr<ob::VideoStreamProfile> selectedColor;
+                    int selectedColorPriority = std::numeric_limits<int>::max();
                     for(uint32_t i = 0; i < colorProfiles->getCount(); ++i) {
                         auto profile = colorProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
                         const auto format = profile->getFormat();
                         if(profile->getWidth() == config_.color.width && profile->getHeight() == config_.color.height && profile->getFps() == config_.color.fps
                            && (format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
                                || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG)) {
-                            selectedColor = profile;
-                            break;
+                            const int priority = colorProfilePriority(format);
+                            if(!selectedColor || priority < selectedColorPriority) {
+                                selectedColor = profile;
+                                selectedColorPriority = priority;
+                            }
                         }
                     }
                     if(!selectedColor) {
@@ -702,8 +726,11 @@ bool OrbbecCamera::connectLocked() {
                             const auto format = profile->getFormat();
                             if(format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
                                || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG) {
-                                selectedColor = profile;
-                                break;
+                                const int priority = colorProfilePriority(format);
+                                if(!selectedColor || priority < selectedColorPriority) {
+                                    selectedColor = profile;
+                                    selectedColorPriority = priority;
+                                }
                             }
                         }
                     }
@@ -755,7 +782,9 @@ bool OrbbecCamera::connectLocked() {
                     }
                 }
 
-                impl_->pipeline->enableFrameSync();
+                if(config_.color.enabled && config_.depth.enabled) {
+                    impl_->pipeline->enableFrameSync();
+                }
                 impl_->pipeline->start(impl_->pipelineConfig);
 
                 connected_ = true;
@@ -848,17 +877,15 @@ void OrbbecCamera::captureOnce() {
                 yuyvToRgb(data, envelope.width, envelope.height, envelope.bytes);
                 break;
             case OB_FORMAT_MJPEG: {
-                auto decoded = imageio::decodeJpegToRgb(data, colorFrame->getDataSize());
-                if(decoded && decoded->width == envelope.width && decoded->height == envelope.height) {
-                    envelope.bytes = std::move(decoded->bytes);
-                }
+                auto jpegBytes = std::make_shared<std::vector<uint8_t>>(data, data + colorFrame->getDataSize());
+                envelope.jpegBytes = std::move(jpegBytes);
                 break;
             }
             default:
                 stats_.onDroppedOutputFrame();
                 break;
             }
-            if(!envelope.bytes.empty()) {
+            if(!envelope.bytes.empty() || envelope.jpegBytes) {
                 {
                     std::scoped_lock lock(mutex_);
                     latestColorFrame_ = envelope;

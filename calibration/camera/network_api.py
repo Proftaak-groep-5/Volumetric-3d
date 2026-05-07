@@ -270,6 +270,7 @@ class NetworkApiCamera(CameraDevice):
         depth_height: int,
         fps: int,
         align_to_color: bool | None = None,
+        camera_tuning: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         timeout_s = max(0.1, float(self._timeout_ms) / 1000.0)
         payload: dict[str, Any] = {
@@ -286,6 +287,29 @@ class NetworkApiCamera(CameraDevice):
         }
         if align_to_color is not None:
             payload["depth"]["align_to_color"] = bool(align_to_color)
+        if camera_tuning:
+            color_payload = payload["color"]
+            tuning_field_map = {
+                "color_auto_exposure": "exposure_auto",
+                "color_exposure": "exposure_value",
+                "color_gain": "gain",
+                "color_auto_white_balance": "white_balance_auto",
+                "color_white_balance": "white_balance_value",
+                "color_brightness": "brightness",
+                "color_contrast": "contrast",
+                "color_saturation": "saturation",
+            }
+            for source_key, target_key in tuning_field_map.items():
+                value = camera_tuning.get(source_key)
+                if value is None:
+                    continue
+                color_payload[target_key] = bool(value) if isinstance(value, bool) else int(value)
+
+            # Avoid forcing manual values while auto modes are enabled.
+            if bool(color_payload.get("exposure_auto", True)):
+                color_payload.pop("exposure_value", None)
+            if bool(color_payload.get("white_balance_auto", True)):
+                color_payload.pop("white_balance_value", None)
 
         response = _http_json_request(
             f"{self._base_url}/settings",

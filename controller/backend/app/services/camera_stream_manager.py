@@ -30,6 +30,7 @@ class RawFrameSnapshot:
     camera_id: str
     frame_index: int
     timestamp_s: float
+    source_timestamp_s: float
     color: np.ndarray | None
     depth: np.ndarray | None
     depth_scale_m: float | None
@@ -129,6 +130,7 @@ class CameraStreamManager:
                 camera_id=camera.camera_id,
                 frame_index=0,
                 timestamp_s=time.time(),
+                source_timestamp_s=time.time(),
                 color=None,
                 depth=None,
                 depth_scale_m=None,
@@ -179,6 +181,7 @@ class CameraStreamManager:
                     depth_height=self._depth_height,
                     fps=self._fps,
                     align_to_color=False,
+                    camera_tuning=self._camera_tuning,
                 )
                 LOGGER.info(
                     "Configured network camera id=%s color=%sx%s depth=%sx%s fps=%s restart_required=%s",
@@ -209,6 +212,7 @@ class CameraStreamManager:
                     depth_height=self._depth_height,
                     fps=self._fps,
                     align_to_color=False,
+                    camera_tuning=self._camera_tuning,
                 )
                 intrinsics = camera.get_intrinsics()
                 self._intrinsics[camera.camera_id] = np.asarray(intrinsics.camera_matrix, dtype=np.float64)
@@ -281,11 +285,13 @@ class CameraStreamManager:
         depth = getattr(frame, "depth", None)
         depth_scale_m = getattr(frame, "depth_scale_m", None)
         frame_index = int(getattr(frame, "frame_index", 0))
+        source_timestamp_s = self._frame_timestamp_seconds(frame)
         with self._lock:
             self._raw_snapshots[camera_id] = RawFrameSnapshot(
                 camera_id=camera_id,
                 frame_index=frame_index,
                 timestamp_s=time.time(),
+                source_timestamp_s=source_timestamp_s,
                 color=None if color is None else color.copy(),
                 depth=None if depth is None else depth.copy(),
                 depth_scale_m=None if depth_scale_m is None else float(depth_scale_m),
@@ -337,6 +343,7 @@ class CameraStreamManager:
                 camera_id=target.camera_id,
                 frame_index=frame.frame_index,
                 timestamp_s=time.time(),
+                source_timestamp_s=self._frame_timestamp_seconds(frame),
                 color=color,
                 depth=depth,
                 depth_scale_m=None if getattr(frame, "depth_scale_m", None) is None else float(frame.depth_scale_m),
@@ -377,7 +384,7 @@ class CameraStreamManager:
                 time.sleep(0.01)
                 continue
 
-            timestamps = [snapshot.timestamp_s for snapshot in snapshots.values()]
+            timestamps = [snapshot.source_timestamp_s for snapshot in snapshots.values()]
             skew_s = max(timestamps) - min(timestamps)
             if skew_s < best_skew_s:
                 best_skew_s = skew_s
@@ -440,10 +447,24 @@ class CameraStreamManager:
             camera_id=snapshot.camera_id,
             frame_index=int(snapshot.frame_index),
             timestamp_s=float(snapshot.timestamp_s),
+            source_timestamp_s=float(snapshot.source_timestamp_s),
             color=None if snapshot.color is None else snapshot.color.copy(),
             depth=None if snapshot.depth is None else snapshot.depth.copy(),
             depth_scale_m=None if snapshot.depth_scale_m is None else float(snapshot.depth_scale_m),
         )
+
+    @staticmethod
+    def _frame_timestamp_seconds(frame: object) -> float:
+        timestamp_ns = getattr(frame, "timestamp_ns", None)
+        if timestamp_ns is None:
+            return time.time()
+        try:
+            timestamp_value = float(timestamp_ns) * 1e-9
+        except (TypeError, ValueError):
+            return time.time()
+        if not np.isfinite(timestamp_value) or timestamp_value <= 0.0:
+            return time.time()
+        return timestamp_value
 
     def camera_details(self) -> list[dict[str, str | int | bool]]:
         details: list[dict[str, str | int | bool]] = []

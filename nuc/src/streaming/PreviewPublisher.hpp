@@ -20,6 +20,7 @@ public:
     bool running() const override;
 
     bool pushRgbFrame(const uint8_t *data, std::size_t bytes, uint64_t timestampUs) override;
+    bool pushJpegFrame(std::shared_ptr<const std::vector<uint8_t>> jpeg, uint64_t timestampUs) override;
     std::shared_ptr<const std::vector<uint8_t>> latestJpeg() const override;
     void setFrameCallback(FrameCallback callback) override;
 

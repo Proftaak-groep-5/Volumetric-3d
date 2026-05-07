@@ -288,6 +288,47 @@ bool PreviewPublisher::pushRgbFrame(const uint8_t *data, std::size_t bytes, uint
 #endif
 }
 
+bool PreviewPublisher::pushJpegFrame(std::shared_ptr<const std::vector<uint8_t>> jpeg, uint64_t timestampUs) {
+    const auto logDropSummary = [this](const char *reason) {
+        const auto now = std::chrono::steady_clock::now();
+        if(impl_->lastDropLogAt.time_since_epoch().count() == 0 || now - impl_->lastDropLogAt >= std::chrono::seconds(5)) {
+            log::get()->warn(
+                "event=preview_drop stream={} reason={} rate_limit={} busy={} invalid_size={} encode={}", name_, reason, impl_->droppedRateLimit,
+                impl_->droppedBusy, impl_->droppedInvalidSize, impl_->droppedEncode);
+            impl_->lastDropLogAt = now;
+        }
+    };
+
+    if(!impl_->started || !jpeg || jpeg->empty()) {
+        return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto interval = std::chrono::microseconds(1'000'000 / std::max(1, impl_->fps));
+    if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
+        ++impl_->droppedRateLimit;
+        logDropSummary("rate_limit");
+        return false;
+    }
+    std::unique_lock pushLock(impl_->pushMutex, std::try_to_lock);
+    if(!pushLock.owns_lock()) {
+        ++impl_->droppedBusy;
+        logDropSummary("busy");
+        return false;
+    }
+
+    FrameCallback callback;
+    {
+        std::scoped_lock lock(mutex_);
+        latestJpeg_ = jpeg;
+        callback = callback_;
+    }
+    impl_->nextFrameAt = now + interval;
+    if(callback) {
+        callback(std::move(jpeg), timestampUs, 0.0);
+    }
+    return true;
+}
+
 std::shared_ptr<const std::vector<uint8_t>> PreviewPublisher::latestJpeg() const {
     std::scoped_lock lock(mutex_);
     return latestJpeg_;

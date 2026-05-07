@@ -5,6 +5,7 @@
 
 #include <crow.h>
 
+#include <condition_variable>
 #include <thread>
 #include <unordered_set>
 
@@ -31,10 +32,17 @@ nlohmann::json parseRequestJson(const crow::request &request) {
 struct HttpServer::Impl {
     crow::SimpleApp app;
     std::thread serverThread;
+    std::thread colorDispatchThread;
     std::mutex wsMutex;
+    std::mutex colorDispatchMutex;
+    std::condition_variable colorDispatchCv;
     std::unordered_set<crow::websocket::connection *> colorClients;
     std::unordered_set<crow::websocket::connection *> depthClients;
     std::unordered_set<crow::websocket::connection *> depthBinaryClients;
+    std::shared_ptr<const std::vector<uint8_t>> pendingColorFrame;
+    uint64_t pendingColorVersion = 0;
+    uint64_t sentColorVersion = 0;
+    bool stopRequested = false;
 };
 
 HttpServer::HttpServer(const Config &config) : impl_(std::make_unique<Impl>()), config_(config) {}
@@ -172,6 +180,31 @@ void HttpServer::start(Callbacks callbacks) {
             log::get()->info("event=ws_client state=disconnected stream=depth_binary clients={}", impl_->depthBinaryClients.size());
         });
 
+    impl_->stopRequested = false;
+    impl_->colorDispatchThread = std::thread([this] {
+        while(true) {
+            std::shared_ptr<const std::vector<uint8_t>> jpeg;
+            {
+                std::unique_lock lock(impl_->colorDispatchMutex);
+                impl_->colorDispatchCv.wait(lock, [this] {
+                    return impl_->stopRequested || impl_->pendingColorVersion != impl_->sentColorVersion;
+                });
+                if(impl_->stopRequested) {
+                    break;
+                }
+                jpeg = impl_->pendingColorFrame;
+                impl_->sentColorVersion = impl_->pendingColorVersion;
+            }
+            if(!jpeg || jpeg->empty()) {
+                continue;
+            }
+            std::scoped_lock lock(impl_->wsMutex);
+            for(auto *client: impl_->colorClients) {
+                client->send_binary(std::string(reinterpret_cast<const char *>(jpeg->data()), jpeg->size()));
+            }
+        }
+    });
+
     impl_->serverThread = std::thread([this] {
         log::get()->info("event=http_server state=running bind={} port={}", config_.bindAddress, config_.httpPort);
         impl_->app.port(config_.httpPort).bindaddr(config_.bindAddress).multithreaded().run();
@@ -179,7 +212,15 @@ void HttpServer::start(Callbacks callbacks) {
 }
 
 void HttpServer::stop() {
+    {
+        std::scoped_lock lock(impl_->colorDispatchMutex);
+        impl_->stopRequested = true;
+    }
+    impl_->colorDispatchCv.notify_all();
     impl_->app.stop();
+    if(impl_->colorDispatchThread.joinable()) {
+        impl_->colorDispatchThread.join();
+    }
     if(impl_->serverThread.joinable()) {
         impl_->serverThread.join();
     }
@@ -190,10 +231,12 @@ void HttpServer::publishColorPreview(std::shared_ptr<const std::vector<uint8_t>>
     if(!jpeg || jpeg->empty()) {
         return;
     }
-    std::scoped_lock lock(impl_->wsMutex);
-    for(auto *client: impl_->colorClients) {
-        client->send_binary(std::string(reinterpret_cast<const char *>(jpeg->data()), jpeg->size()));
+    {
+        std::scoped_lock lock(impl_->colorDispatchMutex);
+        impl_->pendingColorFrame = std::move(jpeg);
+        ++impl_->pendingColorVersion;
     }
+    impl_->colorDispatchCv.notify_one();
 }
 
 void HttpServer::publishDepthPreview(std::shared_ptr<const std::vector<uint8_t>> jpeg) {

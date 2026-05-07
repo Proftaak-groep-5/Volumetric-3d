@@ -53,7 +53,7 @@ def get_settings() -> Settings:
     calibration_default = repo_root / "calib_out" / "final_calibration.json"
     origins_default = "http://localhost:3000,http://127.0.0.1:3000"
 
-    color_auto_exposure = os.getenv("CAMERA_COLOR_AUTO_EXPOSURE", "false").lower() in {"1", "true", "yes", "on"}
+    color_auto_exposure = os.getenv("CAMERA_COLOR_AUTO_EXPOSURE", "true").lower() in {"1", "true", "yes", "on"}
     color_auto_white_balance = os.getenv("CAMERA_COLOR_AUTO_WHITE_BALANCE", "true").lower() in {
         "1",
         "true",
@@ -65,15 +65,15 @@ def get_settings() -> Settings:
         "color_auto_white_balance": color_auto_white_balance,
     }
 
-    color_exposure = _parse_optional_int(os.getenv("CAMERA_COLOR_EXPOSURE", "1200"))
+    color_exposure = _parse_optional_int(os.getenv("CAMERA_COLOR_EXPOSURE", "120"))
     if color_exposure is not None:
         camera_tuning["color_exposure"] = color_exposure
 
-    color_gain = _parse_optional_int(os.getenv("CAMERA_COLOR_GAIN", "32"))
+    color_gain = _parse_optional_int(os.getenv("CAMERA_COLOR_GAIN", "0"))
     if color_gain is not None:
         camera_tuning["color_gain"] = color_gain
 
-    color_brightness = _parse_optional_int(os.getenv("CAMERA_COLOR_BRIGHTNESS", "0"))
+    color_brightness = _parse_optional_int(os.getenv("CAMERA_COLOR_BRIGHTNESS", "10"))
     if color_brightness is not None:
         camera_tuning["color_brightness"] = color_brightness
 
