@@ -32,7 +32,7 @@ class VolumetricCaptureService:
         depth_scale_m: float = 0.001,
         depth_min_m: float = 0.2,
         depth_max_m: float = 2.0,
-        pixel_step: int = 4,
+        pixel_step: int = 1,
     ) -> None:
         self._camera_manager = camera_manager
         self._calibration_store = calibration_store

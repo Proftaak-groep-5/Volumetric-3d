@@ -92,7 +92,7 @@ export default function HomePage() {
         try {
             const payload = {
                 camera_ids: cameras.map((camera) => camera.camera_id),
-                pixel_step: 4,
+                pixel_step: 1,
                 depth_min_m: 0.15,
                 depth_max_m: 5,
             };
