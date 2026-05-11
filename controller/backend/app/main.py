@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.services.calibration_runner import CalibrationRunnerService
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager
+from app.services.recording import RecordingService
 from app.services.triangulation import TriangulationService
 from app.services.volumetric_capture import VolumetricCaptureService
 
@@ -38,7 +39,10 @@ def _startup_app() -> None:
         return
 
     calibration_store = CalibrationStore(settings.calibration_file)
-    calibration_store.load()
+    try:
+        calibration_store.load()
+    except Exception as exc:
+        LOGGER.warning("Calibration file could not be loaded at startup (%s): %s", settings.calibration_file, exc)
     calibration_runner = CalibrationRunnerService(
         repo_root=settings.repo_root,
         calibration_config_file=settings.calibration_config_file,
@@ -66,10 +70,16 @@ def _startup_app() -> None:
     app.state.calibration_runner_service = calibration_runner
     app.state.camera_manager = camera_manager
     app.state.triangulation_service = TriangulationService(camera_manager, calibration_store)
-    app.state.volumetric_capture_service = VolumetricCaptureService(
+    volumetric_capture_service = VolumetricCaptureService(
         camera_manager,
         calibration_store,
         output_dir=settings.volumetric_capture_output_dir,
+    )
+    app.state.volumetric_capture_service = volumetric_capture_service
+    app.state.recording_service = RecordingService(
+        volumetric_capture_service,
+        camera_manager,
+        calibration_store,
     )
     app.state._startup_complete = True
 
@@ -84,6 +94,13 @@ def _shutdown_app() -> None:
             calibration_runner.shutdown()
         except Exception:
             LOGGER.exception("Failed to stop calibration runner cleanly")
+
+    recording_service = getattr(app.state, "recording_service", None)
+    if recording_service is not None:
+        try:
+            recording_service.shutdown()
+        except Exception:
+            LOGGER.exception("Failed to stop recording service cleanly")
 
     manager = getattr(app.state, "camera_manager", None)
     if manager is not None:

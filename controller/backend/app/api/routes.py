@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
     get_calibration_store,
     get_calibration_runner_service,
     get_camera_manager,
+    get_recording_service,
     get_triangulation_service,
     get_volumetric_capture_service,
 )
@@ -23,11 +25,17 @@ from app.schemas import (
     CreateVolumetricCaptureResponse,
     CreateVolumetricPointRequest,
     CreateVolumetricPointResponse,
+    PickRecordingOutputDirectoryResponse,
+    RecordingStatusResponse,
+    StartRecordingRequest,
+    StartRecordingResponse,
     StartCalibrationResponse,
+    StopRecordingResponse,
 )
 from app.services.calibration_runner import CalibrationRunnerService
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager
+from app.services.recording import RecordingService
 from app.services.triangulation import TriangulationService
 from app.services.volumetric_capture import VolumetricCaptureService
 
@@ -61,6 +69,103 @@ def run_calibration(
     return StartCalibrationResponse(
         accepted=True,
         status=CalibrationRunStatusResponse(**snapshot.__dict__),
+    )
+
+
+@router.get("/recording/status")
+def recording_status(
+    recording_service: Annotated[RecordingService, Depends(get_recording_service)],
+    output_dir: str | None = Query(default=None),
+) -> RecordingStatusResponse:
+    snapshot = recording_service.status(selected_output_dir=output_dir)
+    return RecordingStatusResponse(**snapshot.__dict__)
+
+
+@router.get("/recording/pick-output-dir")
+def pick_recording_output_dir(
+    initial_dir: str | None = Query(default=None),
+) -> PickRecordingOutputDirectoryResponse:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Native folder picker is unavailable in this backend environment.",
+        ) from exc
+
+    root: object | None = None
+    selected: str = ""
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        normalized_initial_dir = initial_dir.strip() if initial_dir is not None else ""
+        initial_dir_for_dialog: str | None = None
+        if normalized_initial_dir:
+            requested_path = Path(normalized_initial_dir).expanduser()
+            if requested_path.is_dir():
+                initial_dir_for_dialog = str(requested_path)
+            else:
+                for parent in requested_path.parents:
+                    if parent.is_dir():
+                        initial_dir_for_dialog = str(parent)
+                        break
+        selected = filedialog.askdirectory(
+            parent=root,
+            title="Select recording output folder",
+            initialdir=initial_dir_for_dialog,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to open folder picker: {exc}") from exc
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+    if not selected:
+        return PickRecordingOutputDirectoryResponse(selected_output_dir=None, cancelled=True)
+    return PickRecordingOutputDirectoryResponse(selected_output_dir=selected, cancelled=False)
+
+
+@router.post("/recording/start", responses={400: {"description": "Recording cannot be started"}, 409: {"description": "Recording is already running"}})
+def start_recording(
+    payload: StartRecordingRequest,
+    recording_service: Annotated[RecordingService, Depends(get_recording_service)],
+) -> StartRecordingResponse:
+    try:
+        snapshot = recording_service.start(
+            output_dir=payload.output_dir,
+            camera_ids=payload.camera_ids,
+            depth_min_m=payload.depth_min_m,
+            depth_max_m=payload.depth_max_m,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return StartRecordingResponse(
+        accepted=True,
+        status=RecordingStatusResponse(**snapshot.__dict__),
+    )
+
+
+@router.post("/recording/stop", responses={409: {"description": "Recording is not running"}})
+def stop_recording(
+    recording_service: Annotated[RecordingService, Depends(get_recording_service)],
+) -> StopRecordingResponse:
+    try:
+        snapshot = recording_service.stop()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return StopRecordingResponse(
+        accepted=True,
+        status=RecordingStatusResponse(**snapshot.__dict__),
     )
 
 
@@ -178,6 +283,9 @@ def create_volumetric_capture(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if result.preview_image_path is None or result.preview_image_name is None:
+        raise HTTPException(status_code=500, detail="Capture preview image was not generated")
 
     return CreateVolumetricCaptureResponse(
         capture_file_path=str(result.file_path),

@@ -81,3 +81,44 @@ class CalibrationRunStatusResponse(BaseModel):
 class StartCalibrationResponse(BaseModel):
     accepted: bool
     status: CalibrationRunStatusResponse
+
+
+class RecordingStatusResponse(BaseModel):
+    running: bool
+    can_start: bool
+    disable_reasons: list[str]
+    calibration_file: str
+    calibration_file_exists: bool
+    selected_output_dir: str | None = None
+    output_dir_empty: bool | None = None
+    active_output_dir: str | None = None
+    start_unix_seconds: int | None = None
+    started_at_utc: str | None = None
+    stopped_at_utc: str | None = None
+    target_fps: int | None = None
+    frames_written: int
+    failed_frames: int
+    last_error: str | None = None
+    camera_ids: list[str]
+
+
+class PickRecordingOutputDirectoryResponse(BaseModel):
+    selected_output_dir: str | None = None
+    cancelled: bool
+
+
+class StartRecordingRequest(BaseModel):
+    output_dir: str = Field(..., min_length=1)
+    camera_ids: list[str] | None = None
+    depth_min_m: float | None = Field(default=None, gt=0.0)
+    depth_max_m: float | None = Field(default=None, gt=0.0)
+
+
+class StartRecordingResponse(BaseModel):
+    accepted: bool
+    status: RecordingStatusResponse
+
+
+class StopRecordingResponse(BaseModel):
+    accepted: bool
+    status: RecordingStatusResponse

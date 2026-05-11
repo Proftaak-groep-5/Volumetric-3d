@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,11 +13,38 @@ from app.services.camera_stream_manager import CameraStreamManager, RawFrameSnap
 
 
 @dataclass
+class CaptureConfig:
+    """Configuration for volumetric capture processing."""
+    camera_ids: list[str] | None = None
+    frames_by_camera: dict[str, RawFrameSnapshot] | None = None
+    pixel_step: int | None = None
+    depth_min_m: float | None = None
+    depth_max_m: float | None = None
+    output_dir: Path | None = None
+    file_stem: str | None = None
+    write_preview: bool = True
+    ply_binary: bool = False
+    use_synchronized_snapshots: bool = True
+    synchronized_max_skew_ms: float = 75.0
+    synchronized_timeout_ms: int = 1200
+    allow_direct_capture_fallback: bool = True
+    apply_brightness_balance: bool = True
+    voxel_size_m: float | None = 0.0075
+    parallel_camera_processing: bool = False
+    direct_capture_timeout_ms: int = 600
+    direct_capture_max_attempts: int = 12
+    sample_projected_color: bool = True
+    direct_capture_prefer_depth_only: bool = False
+    write_color: bool = True
+    min_required_cameras: int = 1
+
+
+@dataclass
 class CaptureResult:
     file_path: Path
-    preview_image_path: Path
+    preview_image_path: Path | None
     file_name: str
-    preview_image_name: str
+    preview_image_name: str | None
     points_total: int
     points_per_camera: dict[str, int]
     cameras_used: list[str]
@@ -45,22 +73,64 @@ class VolumetricCaptureService:
     def capture_once(
         self,
         camera_ids: list[str] | None = None,
+        frames_by_camera: dict[str, RawFrameSnapshot] | None = None,
         pixel_step: int | None = None,
         depth_min_m: float | None = None,
         depth_max_m: float | None = None,
-    ) -> CaptureResult:
-        self._output_dir.mkdir(parents=True, exist_ok=True)
-
-        selected_camera_ids = camera_ids or self._camera_manager.camera_ids()
-        synchronized_frames = self._camera_manager.synchronized_raw_snapshots(
-            selected_camera_ids,
-            require_depth=True,
-            max_skew_ms=75.0,
-            timeout_ms=1200,
+        output_dir: Path | None = None,
+        file_stem: str | None = None,
+        write_preview: bool = True,
+        ply_binary: bool = False,
+        use_synchronized_snapshots: bool = True,
+        synchronized_max_skew_ms: float = 75.0,
+        synchronized_timeout_ms: int = 1200,
+        allow_direct_capture_fallback: bool = True,
+        apply_brightness_balance: bool = True,
+        voxel_size_m: float | None = 0.0075,
+        parallel_camera_processing: bool = False,
+        direct_capture_timeout_ms: int = 600,
+        direct_capture_max_attempts: int = 12,
+        sample_projected_color: bool = True,
+        direct_capture_prefer_depth_only: bool = False,
+        write_color: bool = True,
+        min_required_cameras: int = 1,
+    ) -> CaptureResult:  # noqa: PLR0913,C901
+        config = CaptureConfig(
+            camera_ids=camera_ids,
+            frames_by_camera=frames_by_camera,
+            pixel_step=pixel_step,
+            depth_min_m=depth_min_m,
+            depth_max_m=depth_max_m,
+            output_dir=output_dir,
+            file_stem=file_stem,
+            write_preview=write_preview,
+            ply_binary=ply_binary,
+            use_synchronized_snapshots=use_synchronized_snapshots,
+            synchronized_max_skew_ms=synchronized_max_skew_ms,
+            synchronized_timeout_ms=synchronized_timeout_ms,
+            allow_direct_capture_fallback=allow_direct_capture_fallback,
+            apply_brightness_balance=apply_brightness_balance,
+            voxel_size_m=voxel_size_m,
+            parallel_camera_processing=parallel_camera_processing,
+            direct_capture_timeout_ms=direct_capture_timeout_ms,
+            direct_capture_max_attempts=direct_capture_max_attempts,
+            sample_projected_color=sample_projected_color,
+            direct_capture_prefer_depth_only=direct_capture_prefer_depth_only,
+            write_color=write_color,
+            min_required_cameras=min_required_cameras,
         )
-        pixel_step_value = max(1, int(pixel_step if pixel_step is not None else self._pixel_step))
-        depth_min_value = float(self._depth_min_m if depth_min_m is None else depth_min_m)
-        depth_max_value = float(self._depth_max_m if depth_max_m is None else depth_max_m)
+        return self._capture_impl(config)
+
+    def _capture_impl(self, config: CaptureConfig) -> CaptureResult:  # noqa: C901
+        """Implementation of capture logic delegated from capture_once for reduced complexity."""
+        target_output_dir = config.output_dir if config.output_dir is not None else self._output_dir
+        selected_camera_ids = sorted(set(config.camera_ids or self._camera_manager.camera_ids()))
+        synchronized_frames = self._get_synchronized_frames(selected_camera_ids, config)
+        
+        pixel_step_value = max(1, int(config.pixel_step if config.pixel_step is not None else self._pixel_step))
+        depth_min_value = float(self._depth_min_m if config.depth_min_m is None else config.depth_min_m)
+        depth_max_value = float(self._depth_max_m if config.depth_max_m is None else config.depth_max_m)
+        
         all_points_world: list[np.ndarray] = []
         all_colors: list[np.ndarray] = []
         points_per_camera: dict[str, int] = {}
@@ -73,45 +143,198 @@ class VolumetricCaptureService:
             "no_points_after_filter": 0,
         }
 
+        self._process_cameras(
+            selected_camera_ids, config, synchronized_frames, pixel_step_value,
+            depth_min_value, depth_max_value, all_points_world, all_colors,
+            points_per_camera, cameras_used, skipped_cameras, stats,
+        )
+
+        if not all_points_world:
+            raise ValueError(self._build_empty_capture_message(selected_camera_ids, stats))
+        if len(cameras_used) < max(1, int(config.min_required_cameras)):
+            raise ValueError(
+                "Insufficient cameras produced points for capture. "
+                f"required={max(1, int(config.min_required_cameras))} "
+                f"used={len(cameras_used)} "
+                f"selected={len(selected_camera_ids)}"
+            )
+
+        stacked_points, stacked_colors = self._stack_and_process_points(
+            all_points_world, all_colors, config
+        )
+        return self._write_capture_output(
+            target_output_dir, stacked_points, stacked_colors,
+            points_per_camera, cameras_used, skipped_cameras, config
+        )
+
+    def _get_synchronized_frames(
+        self, selected_camera_ids: list[str], config: CaptureConfig
+    ) -> dict[str, RawFrameSnapshot]:
+        """Fetch frames from cameras based on sync configuration."""
+        if config.frames_by_camera is not None:
+            return {
+                camera_id: config.frames_by_camera.get(camera_id)
+                for camera_id in selected_camera_ids
+                if config.frames_by_camera.get(camera_id) is not None
+            }
+        if config.use_synchronized_snapshots:
+            return self._camera_manager.synchronized_raw_snapshots(
+                selected_camera_ids,
+                require_depth=True,
+                max_skew_ms=float(config.synchronized_max_skew_ms),
+                timeout_ms=int(config.synchronized_timeout_ms),
+            )
+        synchronized_frames: dict[str, RawFrameSnapshot] = {}
         for camera_id in selected_camera_ids:
-            world_points, colors, skip_reason = self._capture_world_points_for_camera(
+            frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
+            if frame is not None:
+                synchronized_frames[camera_id] = frame
+        return synchronized_frames
+
+    def _process_cameras(
+        self, selected_camera_ids: list[str], config: CaptureConfig,
+        synchronized_frames: dict[str, RawFrameSnapshot],
+        pixel_step_value: int, depth_min_value: float, depth_max_value: float,
+        all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        points_per_camera: dict[str, int], cameras_used: list[str],
+        skipped_cameras: dict[str, str], stats: dict[str, int],
+    ) -> None:
+        """Process all cameras in parallel or sequential mode."""
+        def capture_for_camera(camera_id: str) -> tuple[str, np.ndarray | None, np.ndarray | None, str | None, str | None]:
+            return camera_id, *self._capture_world_points_for_camera(
                 camera_id,
                 frame=synchronized_frames.get(camera_id),
                 pixel_step=pixel_step_value,
                 depth_min_m=depth_min_value,
                 depth_max_m=depth_max_value,
-                stats=stats,
+                allow_direct_capture_fallback=config.allow_direct_capture_fallback,
+                direct_capture_timeout_ms=config.direct_capture_timeout_ms,
+                direct_capture_max_attempts=config.direct_capture_max_attempts,
+                sample_projected_color=config.sample_projected_color,
+                direct_capture_prefer_depth_only=config.direct_capture_prefer_depth_only,
+                write_color=config.write_color,
             )
-            if world_points is None or colors is None:
-                if skip_reason is not None:
-                    skipped_cameras[camera_id] = skip_reason
-                continue
 
-            all_points_world.append(world_points)
+        if config.parallel_camera_processing and len(selected_camera_ids) > 1:
+            self._process_cameras_parallel(
+                selected_camera_ids, capture_for_camera, config.write_color,
+                all_points_world, all_colors, points_per_camera, cameras_used,
+                skipped_cameras, stats,
+            )
+        else:
+            self._process_cameras_sequential(
+                selected_camera_ids, capture_for_camera, config.write_color,
+                all_points_world, all_colors, points_per_camera, cameras_used,
+                skipped_cameras, stats,
+            )
+
+    def _process_cameras_parallel(
+        self, camera_ids: list[str],
+        capture_func: callable, write_color: bool,
+        all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        points_per_camera: dict[str, int], cameras_used: list[str],
+        skipped_cameras: dict[str, str], stats: dict[str, int],
+    ) -> None:
+        """Process cameras using parallel execution."""
+        max_workers = min(8, len(camera_ids))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(capture_func, camera_id) for camera_id in camera_ids]
+            for future in as_completed(futures):
+                camera_id, world_points, colors, skip_reason, skip_code = future.result()
+                self._add_camera_results(
+                    camera_id, world_points, colors, skip_reason, skip_code, write_color,
+                    all_points_world, all_colors, points_per_camera, cameras_used,
+                    skipped_cameras, stats,
+                )
+
+    def _process_cameras_sequential(
+        self, camera_ids: list[str],
+        capture_func: callable, write_color: bool,
+        all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        points_per_camera: dict[str, int], cameras_used: list[str],
+        skipped_cameras: dict[str, str], stats: dict[str, int],
+    ) -> None:
+        """Process cameras sequentially."""
+        for camera_id in camera_ids:
+            camera_id, world_points, colors, skip_reason, skip_code = capture_func(camera_id)
+            self._add_camera_results(
+                camera_id, world_points, colors, skip_reason, skip_code, write_color,
+                all_points_world, all_colors, points_per_camera, cameras_used,
+                skipped_cameras, stats,
+            )
+
+    def _add_camera_results(
+        self, camera_id: str, world_points: np.ndarray | None, colors: np.ndarray | None,
+        skip_reason: str | None, skip_code: str | None, write_color: bool,
+        all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        points_per_camera: dict[str, int], cameras_used: list[str],
+        skipped_cameras: dict[str, str], stats: dict[str, int],
+    ) -> None:
+        """Add results from a single camera to aggregated lists."""
+        if world_points is None or (write_color and colors is None):
+            if skip_reason is not None:
+                skipped_cameras[camera_id] = skip_reason
+            if skip_code is not None and skip_code in stats:
+                stats[skip_code] += 1
+            return
+        
+        all_points_world.append(world_points)
+        if write_color and colors is not None:
             all_colors.append(colors)
-            points_per_camera[camera_id] = int(world_points.shape[0])
-            cameras_used.append(camera_id)
+        points_per_camera[camera_id] = int(world_points.shape[0])
+        cameras_used.append(camera_id)
 
-        if not all_points_world:
-            raise ValueError(self._build_empty_capture_message(selected_camera_ids, stats))
-
-        all_colors = self._balance_camera_brightness(all_colors)
+    def _stack_and_process_points(
+        self, all_points_world: list[np.ndarray],
+        all_colors: list[np.ndarray], config: CaptureConfig,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        """Stack points and apply post-processing."""
+        if config.write_color and config.apply_brightness_balance:
+            all_colors = self._balance_camera_brightness(all_colors)
         stacked_points = np.vstack(all_points_world)
-        stacked_colors = np.vstack(all_colors)
-        stacked_points, stacked_colors = self._voxel_fuse(stacked_points, stacked_colors, voxel_size_m=0.0075)
+        stacked_colors: np.ndarray | None = np.vstack(all_colors) if config.write_color else None
+        if (config.write_color and config.voxel_size_m is not None and
+            float(config.voxel_size_m) > 0.0 and stacked_colors is not None):
+            stacked_points, stacked_colors = self._voxel_fuse(
+                stacked_points, stacked_colors, voxel_size_m=float(config.voxel_size_m)
+            )
+        return stacked_points, stacked_colors
 
-        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
-        ply_path = self._output_dir / f"volumetric_capture_{timestamp}.ply"
-        preview_path = self._output_dir / f"volumetric_capture_{timestamp}_preview.png"
+    def _write_capture_output(
+        self, output_dir: Path, stacked_points: np.ndarray,
+        stacked_colors: np.ndarray | None, points_per_camera: dict[str, int],
+        cameras_used: list[str], skipped_cameras: dict[str, str], config: CaptureConfig,
+    ) -> CaptureResult:
+        """Write capture output files and return result."""
+        file_stem = config.file_stem
+        if file_stem is None:
+            timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+            file_stem = f"volumetric_capture_{timestamp}"
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        ply_path = output_dir / f"{file_stem}.ply"
+        preview_path: Path | None = None
 
-        self._write_ply(ply_path, stacked_points, stacked_colors)
-        self._write_preview(preview_path, stacked_points, stacked_colors)
+        self._write_ply(
+            ply_path,
+            stacked_points,
+            stacked_colors,
+            binary=bool(config.ply_binary),
+            write_color=bool(config.write_color),
+        )
+        
+        if config.write_preview:
+            preview_colors = stacked_colors
+            if preview_colors is None:
+                preview_colors = np.full((stacked_points.shape[0], 3), 180, dtype=np.uint8)
+            preview_path = output_dir / f"{file_stem}_preview.png"
+            self._write_preview(preview_path, stacked_points, preview_colors)
 
         return CaptureResult(
             file_path=ply_path,
             preview_image_path=preview_path,
             file_name=ply_path.name,
-            preview_image_name=preview_path.name,
+            preview_image_name=preview_path.name if preview_path is not None else None,
             points_total=int(stacked_points.shape[0]),
             points_per_camera=points_per_camera,
             cameras_used=sorted(cameras_used),
@@ -126,27 +349,35 @@ class VolumetricCaptureService:
         pixel_step: int,
         depth_min_m: float,
         depth_max_m: float,
-        stats: dict[str, int],
-    ) -> tuple[np.ndarray | None, np.ndarray | None, str | None]:
+        allow_direct_capture_fallback: bool,
+        direct_capture_timeout_ms: int,
+        direct_capture_max_attempts: int,
+        sample_projected_color: bool,
+        direct_capture_prefer_depth_only: bool,
+        write_color: bool,
+    ) -> tuple[np.ndarray | None, np.ndarray | None, str | None, str | None]:  # noqa: C901
         extrinsics = self._calibration_store.get(camera_id)
         if extrinsics is None:
-            stats["no_calibration"] += 1
-            return None, None, f"{camera_id}: missing calibration entry"
+            return None, None, f"{camera_id}: missing calibration entry", "no_calibration"
 
         if frame is None:
             frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
-        if frame is None:
-            frame = self._camera_manager.capture_raw_frame(camera_id, require_depth=True, timeout_ms=600, max_attempts=12)
+        if frame is None and allow_direct_capture_fallback:
+            frame = self._camera_manager.capture_raw_frame(
+                camera_id,
+                require_depth=True,
+                timeout_ms=max(20, int(direct_capture_timeout_ms)),
+                max_attempts=max(1, int(direct_capture_max_attempts)),
+                prefer_depth_only=bool(direct_capture_prefer_depth_only),
+            )
         if frame is None or frame.depth is None:
-            stats["no_depth_frame"] += 1
-            return None, None, f"{camera_id}: depth frame unavailable"
+            return None, None, f"{camera_id}: depth frame unavailable", "no_depth_frame"
 
         intrinsics = self._depth_intrinsics_for_frame(camera_id, frame)
         if intrinsics is None:
-            stats["no_intrinsics"] += 1
-            return None, None, f"{camera_id}: intrinsics unavailable"
+            return None, None, f"{camera_id}: intrinsics unavailable", "no_intrinsics"
 
-        color_intrinsics = self._camera_manager.intrinsics(camera_id)
+        color_intrinsics = self._camera_manager.intrinsics(camera_id) if sample_projected_color else None
         depth_to_color = self._camera_manager.depth_to_color_transform(camera_id)
 
         depth_points = self._depth_to_camera_points(
@@ -157,8 +388,7 @@ class VolumetricCaptureService:
             depth_max_m=depth_max_m,
         )
         if depth_points.size == 0:
-            stats["no_points_after_filter"] += 1
-            return None, None, f"{camera_id}: no valid points after depth filter"
+            return None, None, f"{camera_id}: no valid points after depth filter", "no_points_after_filter"
 
         color_camera_points = self._map_depth_points_to_color_camera(
             depth_points,
@@ -166,19 +396,20 @@ class VolumetricCaptureService:
             frame=frame,
             intrinsics=color_intrinsics,
         )
-        colors, color_valid = self._sample_colors_from_projection(frame, color_camera_points, color_intrinsics)
-        if color_valid.shape[0] == color_camera_points.shape[0]:
-            if not np.any(color_valid):
-                stats["no_points_after_filter"] += 1
-                return None, None, f"{camera_id}: no valid projected color samples"
-            color_camera_points = color_camera_points[color_valid]
-            colors = colors[color_valid]
-            if color_camera_points.size == 0:
-                stats["no_points_after_filter"] += 1
-                return None, None, f"{camera_id}: no valid projected color samples"
+        if sample_projected_color:
+            colors, color_valid = self._sample_colors_from_projection(frame, color_camera_points, color_intrinsics)
+            if color_valid.shape[0] == color_camera_points.shape[0]:
+                if not np.any(color_valid):
+                    return None, None, f"{camera_id}: no valid projected color samples", "no_points_after_filter"
+                color_camera_points = color_camera_points[color_valid]
+                colors = colors[color_valid]
+                if color_camera_points.size == 0:
+                    return None, None, f"{camera_id}: no valid projected color samples", "no_points_after_filter"
+        else:
+            colors = np.full((color_camera_points.shape[0], 3), 180, dtype=np.uint8) if write_color else None
         
         world_points = self._camera_to_world(color_camera_points, extrinsics.t_camera_world)
-        return world_points, colors, None
+        return world_points, colors, None, None
 
     @staticmethod
     def _build_empty_capture_message(selected_camera_ids: list[str], stats: dict[str, int]) -> str:
@@ -206,6 +437,10 @@ class VolumetricCaptureService:
 
         depth_height, depth_width = frame.depth.shape[:2]
         k = np.asarray(intrinsics, dtype=np.float64).copy()
+        color_width: int | None = None
+        color_height: int | None = None
+        if frame.color is not None and frame.color.ndim >= 2:
+            color_height, color_width = frame.color.shape[:2]
 
         # Prefer actual frame dimensions when available; principal-point based scaling is only a fallback.
         if color_width is not None and color_height is not None and color_width > 0 and color_height > 0:
@@ -495,22 +730,92 @@ class VolumetricCaptureService:
         return (camera_points @ rotation.T) + translation
 
     @staticmethod
-    def _write_ply(path: Path, points: np.ndarray, colors: np.ndarray) -> None:
+    def _write_ply(
+        path: Path,
+        points: np.ndarray,
+        colors: np.ndarray | None,
+        *,
+        binary: bool = False,
+        write_color: bool = True,
+    ) -> None:
+        point_count = int(points.shape[0])
+        if binary:
+            if write_color:
+                header = (
+                    "ply\n"
+                    "format binary_little_endian 1.0\n"
+                    f"element vertex {point_count}\n"
+                    "property float x\n"
+                    "property float y\n"
+                    "property float z\n"
+                    "property uchar red\n"
+                    "property uchar green\n"
+                    "property uchar blue\n"
+                    "end_header\n"
+                )
+                vertex_dtype = np.dtype(
+                    [
+                        ("x", "<f4"),
+                        ("y", "<f4"),
+                        ("z", "<f4"),
+                        ("red", "u1"),
+                        ("green", "u1"),
+                        ("blue", "u1"),
+                    ]
+                )
+            else:
+                header = (
+                    "ply\n"
+                    "format binary_little_endian 1.0\n"
+                    f"element vertex {point_count}\n"
+                    "property float x\n"
+                    "property float y\n"
+                    "property float z\n"
+                    "end_header\n"
+                )
+                vertex_dtype = np.dtype(
+                    [
+                        ("x", "<f4"),
+                        ("y", "<f4"),
+                        ("z", "<f4"),
+                    ]
+                )
+            vertices = np.empty((point_count,), dtype=vertex_dtype)
+            vertices["x"] = points[:, 0].astype(np.float32, copy=False)
+            vertices["y"] = points[:, 1].astype(np.float32, copy=False)
+            vertices["z"] = points[:, 2].astype(np.float32, copy=False)
+            if write_color and colors is not None:
+                # Internal color order is BGR; write PLY as RGB.
+                vertices["red"] = colors[:, 2].astype(np.uint8, copy=False)
+                vertices["green"] = colors[:, 1].astype(np.uint8, copy=False)
+                vertices["blue"] = colors[:, 0].astype(np.uint8, copy=False)
+
+            with path.open("wb") as handle:
+                handle.write(header.encode("ascii"))
+                vertices.tofile(handle)
+            return
+
         with path.open("w", encoding="utf-8") as handle:
             handle.write("ply\n")
             handle.write("format ascii 1.0\n")
-            handle.write(f"element vertex {points.shape[0]}\n")
+            handle.write(f"element vertex {point_count}\n")
             handle.write("property float x\n")
             handle.write("property float y\n")
             handle.write("property float z\n")
-            handle.write("property uchar red\n")
-            handle.write("property uchar green\n")
-            handle.write("property uchar blue\n")
+            if write_color:
+                handle.write("property uchar red\n")
+                handle.write("property uchar green\n")
+                handle.write("property uchar blue\n")
             handle.write("end_header\n")
-            for idx in range(points.shape[0]):
-                x, y, z = points[idx]
-                b, g, r = colors[idx]
-                handle.write(f"{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n")
+            if write_color and colors is not None:
+                for idx in range(point_count):
+                    x, y, z = points[idx]
+                    b, g, r = colors[idx]
+                    handle.write(f"{x:.6f} {y:.6f} {z:.6f} {int(r)} {int(g)} {int(b)}\n")
+            else:
+                for idx in range(point_count):
+                    x, y, z = points[idx]
+                    handle.write(f"{x:.6f} {y:.6f} {z:.6f}\n")
 
     @staticmethod
     def _write_preview(path: Path, points: np.ndarray, colors: np.ndarray) -> None:

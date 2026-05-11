@@ -79,6 +79,7 @@ function LivePreviewImage({ snapshotUrl, alt, className }: Readonly<LivePreviewI
         };
     }, [snapshotUrl]);
 
+    // eslint-disable-next-line @next/next/no-img-element -- Live snapshots are refreshed manually for low-latency preview.
     return <img src={src} alt={alt} className={className} />;
 }
 

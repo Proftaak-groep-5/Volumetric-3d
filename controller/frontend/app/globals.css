@@ -92,6 +92,27 @@ button.secondary {
     color: var(--text);
 }
 
+.recording-folder-input {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 0.58rem 0.72rem;
+    background: rgba(6, 12, 15, 0.88);
+    color: var(--text);
+}
+
+.recording-folder-input::placeholder {
+    color: var(--muted);
+}
+
+.recording-folder-controls {
+    min-width: min(560px, 100%);
+    flex: 1 1 500px;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
 .error-box {
     padding: 0.75rem 0.95rem;
     color: var(--error);
