@@ -441,6 +441,16 @@ class CameraStreamManager:
                     frame = target.get_depth_frame(timeout_ms=timeout_ms)
                 else:
                     frame = target.get_frame(timeout_ms=timeout_ms)
+                    # Network cameras can intermittently return color without depth.
+                    # When depth is mandatory, retry the same attempt with depth-only fetch.
+                    if (
+                        require_depth
+                        and isinstance(target, NetworkApiCamera)
+                        and (frame is None or frame.depth is None)
+                    ):
+                        depth_only_frame = target.get_depth_frame(timeout_ms=timeout_ms)
+                        if depth_only_frame is not None:
+                            frame = depth_only_frame
             if frame is None:
                 continue
 
