@@ -217,6 +217,7 @@ class NetworkApiCamera(CameraDevice):
         use_depth: bool,
         timeout_ms: int,
         depth_scale_m: float | None,
+        depth_alignment_enabled: bool = False,
     ) -> None:
         self._camera_id = camera_id
         self._base_url = base_url.rstrip("/")
@@ -229,6 +230,7 @@ class NetworkApiCamera(CameraDevice):
         self._use_depth = bool(use_depth)
         self._timeout_ms = int(timeout_ms)
         self._depth_scale_m = float(depth_scale_m) if depth_scale_m is not None else None
+        self._depth_alignment_enabled = bool(depth_alignment_enabled)
         self._frame_index = 0
         self._started = False
 
@@ -270,9 +272,13 @@ class NetworkApiCamera(CameraDevice):
         return self._intrinsics
 
     def get_depth_intrinsics(self) -> CameraIntrinsics | None:
+        if self._depth_alignment_enabled:
+            return self._intrinsics
         return self._depth_intrinsics
 
     def get_depth_to_color_transform(self) -> np.ndarray | None:
+        if self._depth_alignment_enabled:
+            return None
         if self._depth_to_color_transform is None:
             return None
         return self._depth_to_color_transform.copy()
@@ -329,6 +335,9 @@ class NetworkApiCamera(CameraDevice):
                 payload={},
             )
             time.sleep(0.5)
+
+        # Refresh cached calibration after any settings change so callers see the current stream geometry.
+        self.refresh_metadata(timeout_s=config_timeout_s, retries=2, retry_delay_s=0.25)
 
         return response
 
@@ -427,6 +436,7 @@ class NetworkApiCamera(CameraDevice):
         self._intrinsics = color_intrinsics
         self._depth_intrinsics = depth_intrinsics
         self._depth_to_color_transform = None if depth_to_color_transform is None else np.asarray(depth_to_color_transform, dtype=np.float64)
+        self._depth_alignment_enabled = bool(calibration.get("depth_alignment_enabled", False))
         self._depth_scale_m = _depth_scale_to_meters(metadata.get("depth_scale"))
 
     def _get_intrinsics_from_calibration(self, calibration: Mapping[str, Any], prefix: str) -> np.ndarray | None:
@@ -673,6 +683,7 @@ def _discover_single_network_camera(
         if calibration.get("depth_to_color_extrinsic") is not None
         else calibration.get("depth_to_color")
     )
+    depth_alignment_enabled = bool(calibration.get("depth_alignment_enabled", False))
     device = metadata.get("device") if isinstance(metadata.get("device"), Mapping) else {}
     instance_id = str(discovery.get("instance_id", "")).strip()
     serial_number = str(discovery.get("serial_number", "")).strip()
@@ -691,6 +702,7 @@ def _discover_single_network_camera(
         use_depth=use_depth,
         timeout_ms=timeout_ms,
         depth_scale_m=depth_scale,
+        depth_alignment_enabled=depth_alignment_enabled,
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 import cv2
@@ -69,6 +70,8 @@ class VolumetricCaptureService:
         self._depth_min_m = float(depth_min_m)
         self._depth_max_m = float(depth_max_m)
         self._pixel_step = max(1, int(pixel_step))
+        mode = os.getenv("VOLUMETRIC_DEPTH_TO_COLOR_MODE", "forward").strip().lower()
+        self._depth_to_color_mode = mode if mode in {"forward", "inverse", "identity", "auto"} else "forward"
 
     def capture_once(
         self,
@@ -634,6 +637,18 @@ class VolumetricCaptureService:
         if transform.shape != (4, 4):
             return depth_points
 
+        mode = self._depth_to_color_mode
+        if mode == "identity":
+            return depth_points
+        if mode == "inverse":
+            try:
+                return self._apply_transform(depth_points, np.linalg.inv(transform))
+            except np.linalg.LinAlgError:
+                return depth_points
+        if mode == "forward":
+            return self._apply_transform(depth_points, transform)
+
+        # Auto mode: keep legacy behavior as an explicit opt-in for diagnostics.
         forward_candidate = self._apply_transform(depth_points, transform)
         candidates: list[tuple[str, np.ndarray]] = [
             ("forward", forward_candidate),
@@ -657,7 +672,6 @@ class VolumetricCaptureService:
         if inverse_candidate is not None:
             candidates.append(("inverse", inverse_candidate))
 
-        # Prefer candidates that project more points inside the color frame.
         scored: list[tuple[str, float, np.ndarray]] = []
         for name, candidate in candidates:
             score = self._projection_score(frame.color, candidate, intrinsics_scaled)
