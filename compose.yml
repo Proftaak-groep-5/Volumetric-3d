@@ -9,6 +9,34 @@ services:
       POSTGRES_DB: testdb
     ports:
       - "5432:5432"
+
+  falco:
+    image: falcosecurity/falco:latest
+    container_name: falco
+    privileged: true
+    pid: host
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - /proc:/host/proc:ro
+      - /etc:/host/etc:ro
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro
+      - /dev:/host/dev
+      - /lib/modules:/host/lib/modules:ro
+      - /boot:/host/boot:ro
+      - /usr:/host/usr:ro
+    restart: unless-stopped
+
+  falcosidekick:
+      image: falcosecurity/falcosidekick:latest
+      container_name: falcosidekick
+      ports:
+        - "2801:2801"
+      environment:
+        - DISCORD_WEBHOOKURL=https://discord.com/api/webhooks/1506270977850343444/fgM_FNrCiQzZBNXpexVIYa-M-fRUwtIlHbMrd18ZsUZJRUQzCeo2hIuTVy9aHfoP_MUO
+      restart: unless-stopped
+
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin
@@ -21,3 +49,4 @@ services:
 volumes:
   postgres_data:
     driver: local
+
