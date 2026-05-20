@@ -1,0 +1,58 @@
+{
+    "output": "calib_out",
+    "dict": "DICT_4X4_50",
+    "cube": {
+        "marker_length": 0.078,
+        "cube_length": 0.09
+    },
+    "face_ids": {
+        "front": 3,
+        "top": 4,
+        "left": 5,
+        "right": 0,
+        "back": 1,
+        "bottom": 2
+    },
+    "color_res": "3840x2160",
+    "depth_res": "640x576",
+    "fps": 30,
+    "camera": {
+        "color_auto_exposure": false,
+        "color_exposure": 120,
+        "color_gain": 0,
+        "color_auto_white_balance": true,
+        "color_white_balance": null,
+        "color_brightness": 10
+    },
+    "network_camera": {
+        "enabled": true,
+        "subnet": "192.168.137.0/24",
+        "ips": [],
+        "ports": [8080],
+        "timeout_ms": 350,
+        "max_cameras": 16,
+        "max_workers": 32
+    },
+    "frame_count": 60,
+    "warmup_frames": 5,
+    "max_cameras": 6,
+    "world_origin": "cube_center",
+    "use_depth": false,
+    "quality": {
+        "min_markers_per_frame": 1,
+        "min_valid_frames_per_camera": 10,
+        "max_reprojection_error_px": 6.0,
+        "marker_outlier_translation_m": 0.06,
+        "marker_outlier_rotation_deg": 8.0,
+        "frame_outlier_translation_m": 0.08,
+        "frame_outlier_rotation_deg": 10.0,
+        "max_translation_std_m": 0.03,
+        "max_rotation_std_deg": 3.5
+    },
+    "debug": {
+        "enabled": false,
+        "show_windows": false,
+        "save_images": true,
+        "image_format": "jpg"
+    }
+}

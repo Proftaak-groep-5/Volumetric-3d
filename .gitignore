@@ -54,7 +54,73 @@ frontend/build/
 # Logs
 *.log
 logs/
+Log/
 
 # OS
 Thumbs.db
 
+# project specific data
+data/
+calib_out/
+nuc/dist-*/
+nuc/release-bundle/
+nuc/*.zip
+
+# ===== Unity =====
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+UserSettings/
+
+# Crash reports
+sysinfo.txt
+
+# Auto-generated VS files
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.VC.db
+*.VC.opendb
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# CMake / native build outputs
+.vs/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+cmake-build-*/
+build-*/
+out/
+bin/
+obj/
+Debug/
+Release/
+x64/
+x86/
+_deps/
+
+# Unity meta
+*.pidb.meta
+*.pdb.meta
+
+# OS
+.DS_Store
+Thumbs.db
+
+.next
+controller/backend/Log/OrbbecSDK.log.txt
+controller/backend/Log/OrbbecSDK.log.txt
