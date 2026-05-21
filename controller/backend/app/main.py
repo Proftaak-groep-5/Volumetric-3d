@@ -70,6 +70,8 @@ def _startup_app() -> None:
     app.state.calibration_runner_service = calibration_runner
     app.state.camera_manager = camera_manager
     app.state.triangulation_service = TriangulationService(camera_manager, calibration_store)
+    app.state.repo_root = settings.repo_root
+    app.state.blender_update_command = settings.blender_update_command
     volumetric_capture_service = VolumetricCaptureService(
         camera_manager,
         calibration_store,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pathlib import Path
@@ -28,6 +29,7 @@ class Settings:
     max_cameras: int
     volumetric_capture_output_dir: Path
     capture_output_url_prefix: str
+    blender_update_command: list[str] | None
     camera_tuning: dict[str, int | bool]
     network_camera: "NetworkCameraDiscoveryConfig"
 
@@ -45,6 +47,30 @@ def _parse_optional_int(raw: str | None) -> int | None:
     if not value:
         return None
     return int(value)
+
+
+def _parse_command(raw: str | None) -> list[str] | None:
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    return shlex.split(value, posix=os.name != "nt")
+
+
+def _default_blender_update_command(repo_root: Path) -> list[str] | None:
+    blender_file = repo_root / "blender" / "ColorCloud.blend"
+    if not blender_file.exists():
+        return None
+
+    blender_executable = os.getenv("BLENDER_EXECUTABLE", "blender")
+    return [
+        blender_executable,
+        str(blender_file),
+        "--background",
+        "--python-expr",
+        "import bpy; exec(bpy.data.texts['Text.py'].as_string())",
+    ]
 
 
 
@@ -96,6 +122,10 @@ def get_settings() -> Settings:
     )
     network_camera.validate()
 
+    blender_update_command = _parse_command(os.getenv("BLENDER_UPDATE_COMMAND"))
+    if blender_update_command is None:
+        blender_update_command = _default_blender_update_command(repo_root)
+
     return Settings(
         repo_root=repo_root.resolve(),
         host=os.getenv("HOST", "0.0.0.0"),
@@ -116,6 +146,7 @@ def get_settings() -> Settings:
             os.getenv("VOLUMETRIC_CAPTURE_OUTPUT_DIR", str(repo_root / "calib_out" / "captures"))
         ).resolve(),
         capture_output_url_prefix=os.getenv("CAPTURE_OUTPUT_URL_PREFIX", "/captures").strip() or "/captures",
+        blender_update_command=blender_update_command,
         camera_tuning=camera_tuning,
         network_camera=network_camera,
     )

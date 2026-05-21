@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
 import asyncio
+import logging
+import os
+import subprocess
+import threading
 from pathlib import Path
+from shutil import which
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -39,7 +45,90 @@ from app.services.recording import RecordingService
 from app.services.triangulation import TriangulationService
 from app.services.volumetric_capture import VolumetricCaptureService
 
+LOGGER = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["controller"])
+
+
+def _notify_blender_update(request: Request, event: str, payload: dict[str, object]) -> None:
+    repo_root = getattr(request.app.state, "repo_root", None)
+    command = getattr(request.app.state, "blender_update_command", None)
+    if repo_root is None or command is None:
+        return
+
+    thread = threading.Thread(
+        target=_run_blender_update,
+        args=(Path(repo_root), list(command), event, payload),
+        daemon=True,
+        name="blender-update",
+    )
+    thread.start()
+
+
+def _run_blender_update(repo_root: Path, command: list[str], event: str, payload: dict[str, object]) -> None:
+    resolved_command = _resolve_blender_command(command)
+    if resolved_command is None:
+        LOGGER.error("Blender update hook could not find a Blender executable")
+        return
+
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+    message = json.dumps({"event": event, "payload": payload}, ensure_ascii=False)
+    try:
+        completed = subprocess.run(
+            resolved_command,
+            cwd=str(repo_root),
+            input=message,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+            creationflags=creationflags,
+        )
+    except Exception as exc:
+        LOGGER.exception("Blender update hook failed to launch command=%s error=%s", resolved_command, exc)
+        return
+
+    if completed.returncode != 0:
+        stderr = (completed.stderr or completed.stdout or "").strip()
+        LOGGER.warning(
+            "Blender update hook failed exit_code=%s command=%s output=%s",
+            completed.returncode,
+            resolved_command,
+            stderr[-2000:] if stderr else None,
+        )
+        return
+
+    stdout = (completed.stdout or "").strip()
+    if stdout:
+        LOGGER.info("Blender update hook completed command=%s output=%s", resolved_command, stdout[-2000:])
+
+
+def _resolve_blender_command(command: list[str]) -> list[str] | None:
+    if not command:
+        return None
+
+    executable = command[0]
+    if os.path.isabs(executable) or os.path.sep in executable or (os.path.altsep and os.path.altsep in executable):
+        if Path(executable).exists():
+            return list(command)
+        return None
+
+    resolved = which(executable)
+    if resolved:
+        return [resolved, *command[1:]]
+
+    if os.name == "nt" and executable.lower() in {"blender", "blender.exe"}:
+        candidates = [
+            Path(r"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"),
+            Path(r"C:\Program Files\Blender Foundation\Blender 5.0\blender.exe"),
+            Path(r"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"),
+            Path(r"C:\Program Files\Blender Foundation\Blender 4.4\blender.exe"),
+            Path(r"C:\Program Files\Blender Foundation\Blender 4.3\blender.exe"),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return [str(candidate), *command[1:]]
+
+    return None
 
 
 @router.get("/health")
@@ -249,6 +338,7 @@ def create_volumetric_point(
     payload: CreateVolumetricPointRequest,
     triangulation: Annotated[TriangulationService, Depends(get_triangulation_service)],
     calibration_store: Annotated[CalibrationStore, Depends(get_calibration_store)],
+    request: Request,
 ) -> CreateVolumetricPointResponse:
     try:
         point_world, reprojection_error = triangulation.create_point(payload.observations)
@@ -257,7 +347,7 @@ def create_volumetric_point(
 
     point_unity = triangulation.to_unity(point_world)
 
-    return CreateVolumetricPointResponse(
+    response = CreateVolumetricPointResponse(
         point_world_xyz=[float(value) for value in point_world.tolist()],
         point_unity_xyz=[float(value) for value in point_unity.tolist()],
         cameras_used=sorted(reprojection_error.keys()),
@@ -266,6 +356,8 @@ def create_volumetric_point(
             "calibration_file": str(calibration_store.calibration_file),
         },
     )
+    _notify_blender_update(request, "volumetric-point", response.model_dump())
+    return response
 
 
 @router.post("/volumetric-capture", responses={400: {"description": "Failed to generate stitched point cloud"}})
@@ -273,6 +365,7 @@ def create_volumetric_capture(
     payload: CreateVolumetricCaptureRequest,
     capture_service: Annotated[VolumetricCaptureService, Depends(get_volumetric_capture_service)],
     calibration_store: Annotated[CalibrationStore, Depends(get_calibration_store)],
+    request: Request,
 ) -> CreateVolumetricCaptureResponse:
     try:
         result = capture_service.capture_once(
@@ -287,7 +380,7 @@ def create_volumetric_capture(
     if result.preview_image_path is None or result.preview_image_name is None:
         raise HTTPException(status_code=500, detail="Capture preview image was not generated")
 
-    return CreateVolumetricCaptureResponse(
+    response = CreateVolumetricCaptureResponse(
         capture_file_path=str(result.file_path),
         preview_image_path=str(result.preview_image_path),
         capture_file_url=f"/captures/{result.file_name}",
@@ -300,3 +393,5 @@ def create_volumetric_capture(
             "skipped_cameras": result.skipped_cameras,
         },
     )
+    _notify_blender_update(request, "volumetric-capture", response.model_dump())
+    return response
