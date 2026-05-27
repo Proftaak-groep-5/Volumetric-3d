@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
+import logging
 import os
 from pathlib import Path
 
@@ -11,6 +13,8 @@ import numpy as np
 
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager, RawFrameSnapshot
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,6 +76,67 @@ class VolumetricCaptureService:
         self._pixel_step = max(1, int(pixel_step))
         mode = os.getenv("VOLUMETRIC_DEPTH_TO_COLOR_MODE", "forward").strip().lower()
         self._depth_to_color_mode = mode if mode in {"forward", "inverse", "identity", "auto"} else "forward"
+        self._icp_enabled = os.getenv("VOLUMETRIC_ICP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        self._icp_coarse_max_points = max(500, int(os.getenv("VOLUMETRIC_ICP_COARSE_MAX_POINTS", "3200")))
+        self._icp_fine_max_points = max(500, int(os.getenv("VOLUMETRIC_ICP_FINE_MAX_POINTS", "2200")))
+        self._icp_max_iterations = max(3, int(os.getenv("VOLUMETRIC_ICP_MAX_ITER", "24")))
+        self._icp_tolerance_m = float(os.getenv("VOLUMETRIC_ICP_TOLERANCE_M", "0.0005"))
+        self._icp_trim_ratio = float(np.clip(float(os.getenv("VOLUMETRIC_ICP_TRIM_RATIO", "0.80")), 0.45, 1.0))
+        self._icp_max_correspondence_m = max(
+            0.005,
+            float(os.getenv("VOLUMETRIC_ICP_MAX_CORRESPONDENCE_M", "0.08")),
+        )
+        self._icp_min_correspondence_m = max(
+            0.003,
+            float(os.getenv("VOLUMETRIC_ICP_MIN_CORRESPONDENCE_M", "0.015")),
+        )
+        self._icp_stage_distance_decay = float(
+            np.clip(float(os.getenv("VOLUMETRIC_ICP_STAGE_DECAY", "0.55")), 0.35, 0.95)
+        )
+        self._icp_overlap_threshold = float(np.clip(float(os.getenv("VOLUMETRIC_ICP_MIN_OVERLAP", "0.28")), 0.05, 0.95))
+        self._icp_max_mean_error_m = float(os.getenv("VOLUMETRIC_ICP_MAX_MEAN_ERROR_M", "0.025"))
+        self._icp_max_translation_step_m = max(
+            0.01,
+            float(os.getenv("VOLUMETRIC_ICP_MAX_TRANSLATION_STEP_M", "0.20")),
+        )
+        self._icp_max_rotation_step_deg = max(
+            0.5,
+            float(os.getenv("VOLUMETRIC_ICP_MAX_ROTATION_STEP_DEG", "20.0")),
+        )
+        self._persistent_alignment_enabled = (
+            os.getenv("VOLUMETRIC_PERSIST_ALIGNMENT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        )
+        self._persistent_alignment_alpha = float(
+            np.clip(float(os.getenv("VOLUMETRIC_PERSIST_ALIGNMENT_ALPHA", "0.55")), 0.05, 1.0)
+        )
+        self._capture_volume_enabled = (
+            os.getenv("VOLUMETRIC_CAPTURE_VOLUME_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+        )
+        self._capture_volume_half_extents_m = np.asarray(
+            [
+                float(os.getenv("VOLUMETRIC_CAPTURE_VOLUME_HALF_X_M", "0.45")),
+                float(os.getenv("VOLUMETRIC_CAPTURE_VOLUME_HALF_Y_M", "0.60")),
+                float(os.getenv("VOLUMETRIC_CAPTURE_VOLUME_HALF_Z_M", "0.45")),
+            ],
+            dtype=np.float64,
+        )
+        self._capture_volume_half_extents_m = np.maximum(self._capture_volume_half_extents_m, 0.05)
+        self._capture_volume_origin_m = np.asarray(
+            [
+                float(os.getenv("VOLUMETRIC_CAPTURE_VOLUME_ORIGIN_X_M", "0.0")),
+                float(os.getenv("VOLUMETRIC_CAPTURE_VOLUME_ORIGIN_Y_M", "0.0")),
+                float(os.getenv("VOLUMETRIC_CAPTURE_VOLUME_ORIGIN_Z_M", "0.0")),
+            ],
+            dtype=np.float64,
+        )
+        capture_max_radius_raw = float(os.getenv("VOLUMETRIC_CAPTURE_MAX_RADIUS_M", "0.60"))
+        self._capture_volume_max_radius_m = capture_max_radius_raw if capture_max_radius_raw > 0.0 else None
+        default_alignment_file = self._output_dir / "camera_alignment_state.json"
+        self._alignment_state_file = Path(
+            os.getenv("VOLUMETRIC_ALIGNMENT_STATE_FILE", str(default_alignment_file))
+        ).resolve()
+        self._rng = np.random.default_rng()
+        self._camera_alignment_offsets = self._load_alignment_offsets()
 
     def capture_once(
         self,
@@ -136,6 +201,8 @@ class VolumetricCaptureService:
         
         all_points_world: list[np.ndarray] = []
         all_colors: list[np.ndarray] = []
+        per_camera_points: dict[str, np.ndarray] = {}
+        per_camera_colors: dict[str, np.ndarray] = {}
         points_per_camera: dict[str, int] = {}
         cameras_used: list[str] = []
         skipped_cameras: dict[str, str] = {}
@@ -149,7 +216,8 @@ class VolumetricCaptureService:
         self._process_cameras(
             selected_camera_ids, config, synchronized_frames, pixel_step_value,
             depth_min_value, depth_max_value, all_points_world, all_colors,
-            points_per_camera, cameras_used, skipped_cameras, stats,
+            per_camera_points, per_camera_colors, points_per_camera,
+            cameras_used, skipped_cameras, stats,
         )
 
         if not all_points_world:
@@ -162,9 +230,18 @@ class VolumetricCaptureService:
                 f"selected={len(selected_camera_ids)}"
             )
 
-        stacked_points, stacked_colors = self._stack_and_process_points(
-            all_points_world, all_colors, config
-        )
+        if self._icp_enabled and len(cameras_used) > 1:
+            self._refine_camera_alignment(
+                cameras_used,
+                per_camera_points,
+                per_camera_colors,
+                write_color=bool(config.write_color),
+            )
+            all_points_world = [per_camera_points[camera_id] for camera_id in cameras_used]
+            if config.write_color:
+                all_colors = [per_camera_colors[camera_id] for camera_id in cameras_used]
+
+        stacked_points, stacked_colors = self._stack_and_process_points(all_points_world, all_colors, config)
         return self._write_capture_output(
             target_output_dir, stacked_points, stacked_colors,
             points_per_camera, cameras_used, skipped_cameras, config
@@ -199,6 +276,7 @@ class VolumetricCaptureService:
         synchronized_frames: dict[str, RawFrameSnapshot],
         pixel_step_value: int, depth_min_value: float, depth_max_value: float,
         all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        per_camera_points: dict[str, np.ndarray], per_camera_colors: dict[str, np.ndarray],
         points_per_camera: dict[str, int], cameras_used: list[str],
         skipped_cameras: dict[str, str], stats: dict[str, int],
     ) -> None:
@@ -221,13 +299,15 @@ class VolumetricCaptureService:
         if config.parallel_camera_processing and len(selected_camera_ids) > 1:
             self._process_cameras_parallel(
                 selected_camera_ids, capture_for_camera, config.write_color,
-                all_points_world, all_colors, points_per_camera, cameras_used,
+                all_points_world, all_colors, per_camera_points, per_camera_colors,
+                points_per_camera, cameras_used,
                 skipped_cameras, stats,
             )
         else:
             self._process_cameras_sequential(
                 selected_camera_ids, capture_for_camera, config.write_color,
-                all_points_world, all_colors, points_per_camera, cameras_used,
+                all_points_world, all_colors, per_camera_points, per_camera_colors,
+                points_per_camera, cameras_used,
                 skipped_cameras, stats,
             )
 
@@ -235,6 +315,7 @@ class VolumetricCaptureService:
         self, camera_ids: list[str],
         capture_func: callable, write_color: bool,
         all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        per_camera_points: dict[str, np.ndarray], per_camera_colors: dict[str, np.ndarray],
         points_per_camera: dict[str, int], cameras_used: list[str],
         skipped_cameras: dict[str, str], stats: dict[str, int],
     ) -> None:
@@ -246,7 +327,8 @@ class VolumetricCaptureService:
                 camera_id, world_points, colors, skip_reason, skip_code = future.result()
                 self._add_camera_results(
                     camera_id, world_points, colors, skip_reason, skip_code, write_color,
-                    all_points_world, all_colors, points_per_camera, cameras_used,
+                    all_points_world, all_colors, per_camera_points, per_camera_colors,
+                    points_per_camera, cameras_used,
                     skipped_cameras, stats,
                 )
 
@@ -254,6 +336,7 @@ class VolumetricCaptureService:
         self, camera_ids: list[str],
         capture_func: callable, write_color: bool,
         all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        per_camera_points: dict[str, np.ndarray], per_camera_colors: dict[str, np.ndarray],
         points_per_camera: dict[str, int], cameras_used: list[str],
         skipped_cameras: dict[str, str], stats: dict[str, int],
     ) -> None:
@@ -262,7 +345,8 @@ class VolumetricCaptureService:
             camera_id, world_points, colors, skip_reason, skip_code = capture_func(camera_id)
             self._add_camera_results(
                 camera_id, world_points, colors, skip_reason, skip_code, write_color,
-                all_points_world, all_colors, points_per_camera, cameras_used,
+                all_points_world, all_colors, per_camera_points, per_camera_colors,
+                points_per_camera, cameras_used,
                 skipped_cameras, stats,
             )
 
@@ -270,6 +354,7 @@ class VolumetricCaptureService:
         self, camera_id: str, world_points: np.ndarray | None, colors: np.ndarray | None,
         skip_reason: str | None, skip_code: str | None, write_color: bool,
         all_points_world: list[np.ndarray], all_colors: list[np.ndarray],
+        per_camera_points: dict[str, np.ndarray], per_camera_colors: dict[str, np.ndarray],
         points_per_camera: dict[str, int], cameras_used: list[str],
         skipped_cameras: dict[str, str], stats: dict[str, int],
     ) -> None:
@@ -284,8 +369,380 @@ class VolumetricCaptureService:
         all_points_world.append(world_points)
         if write_color and colors is not None:
             all_colors.append(colors)
+        per_camera_points[camera_id] = world_points
+        if write_color and colors is not None:
+            per_camera_colors[camera_id] = colors
         points_per_camera[camera_id] = int(world_points.shape[0])
         cameras_used.append(camera_id)
+
+    def _refine_camera_alignment(
+        self,
+        cameras_used: list[str],
+        per_camera_points: dict[str, np.ndarray],
+        per_camera_colors: dict[str, np.ndarray],
+        *,
+        write_color: bool,
+    ) -> None:
+        if len(cameras_used) < 2:
+            return
+
+        # Keep world anchoring stable by always choosing the same camera id as reference.
+        reference_id = sorted(cameras_used)[0]
+        reference_points = per_camera_points.get(reference_id)
+        if reference_points is None or reference_points.shape[0] < 80:
+            return
+
+        reference_cloud = self._prepare_icp_points(
+            reference_points,
+            max_points=max(self._icp_coarse_max_points * 4, 12000),
+            voxel_size=max(self._icp_min_correspondence_m * 0.8, 0.004),
+        )
+        updated_offsets: dict[str, np.ndarray] = {}
+        candidate_camera_ids = [camera_id for camera_id in cameras_used if camera_id != reference_id]
+        candidate_camera_ids.sort(key=lambda camera_id: per_camera_points.get(camera_id, np.empty((0, 3))).shape[0], reverse=True)
+
+        for camera_id in candidate_camera_ids:
+            source_points = per_camera_points.get(camera_id)
+            if source_points is None or source_points.shape[0] < 80:
+                continue
+
+            transform, metrics = self._icp_align(source_points, reference_cloud)
+            if transform is None or metrics is None:
+                LOGGER.debug("ICP skipped for %s: no stable transform found", camera_id)
+                continue
+            if not self._icp_alignment_is_valid(transform, metrics):
+                LOGGER.debug(
+                    "ICP rejected for %s: mean_error=%.4f overlap=%.3f inliers=%s",
+                    camera_id,
+                    float(metrics.get("mean_error_m", -1.0)),
+                    float(metrics.get("overlap_ratio", -1.0)),
+                    int(metrics.get("inliers", 0)),
+                )
+                continue
+
+            refined_points = self._apply_transform(source_points, transform)
+            per_camera_points[camera_id] = refined_points
+            if write_color and camera_id in per_camera_colors:
+                per_camera_colors[camera_id] = per_camera_colors[camera_id]
+            reference_cloud = self._extend_reference_cloud(reference_cloud, refined_points)
+
+            if self._persistent_alignment_enabled:
+                previous_offset = self._camera_alignment_offsets.get(camera_id, np.eye(4, dtype=np.float64))
+                damped_delta = self._scale_rigid_transform(transform, self._persistent_alignment_alpha)
+                updated_offsets[camera_id] = damped_delta @ previous_offset
+
+            LOGGER.info(
+                "ICP accepted for %s -> %s: mean_error=%.4f overlap=%.3f inliers=%s",
+                camera_id,
+                reference_id,
+                float(metrics.get("mean_error_m", -1.0)),
+                float(metrics.get("overlap_ratio", -1.0)),
+                int(metrics.get("inliers", 0)),
+            )
+
+        if updated_offsets:
+            self._camera_alignment_offsets.update(updated_offsets)
+            self._save_alignment_offsets()
+
+    def _prepare_icp_points(self, points: np.ndarray, max_points: int, voxel_size: float) -> np.ndarray:
+        if points.shape[0] <= 0:
+            return points
+        reduced = self._voxel_downsample_points(points, voxel_size)
+        return self._icp_sample(reduced, max_points)
+
+    def _icp_sample(self, points: np.ndarray, max_points: int) -> np.ndarray:
+        if points.shape[0] <= max_points:
+            return points
+        indices = self._rng.choice(points.shape[0], size=max_points, replace=False)
+        return points[indices]
+
+    @staticmethod
+    def _voxel_downsample_points(points: np.ndarray, voxel_size: float) -> np.ndarray:
+        if points.shape[0] <= 1:
+            return points
+        step = float(max(voxel_size, 1e-4))
+        voxel_indices = np.floor(points / step).astype(np.int64)
+        _, inverse = np.unique(voxel_indices, axis=0, return_inverse=True)
+        if inverse.size == 0:
+            return points
+
+        voxel_count = int(inverse.max()) + 1
+        points_sum = np.zeros((voxel_count, 3), dtype=np.float64)
+        counts = np.zeros((voxel_count,), dtype=np.int32)
+        np.add.at(points_sum, inverse, points)
+        np.add.at(counts, inverse, 1)
+
+        valid = counts > 0
+        return points_sum[valid] / counts[valid, None]
+
+    def _icp_align(
+        self,
+        source_points: np.ndarray,
+        target_points: np.ndarray,
+    ) -> tuple[np.ndarray | None, dict[str, float | int] | None]:
+        if source_points.shape[0] < 30 or target_points.shape[0] < 30:
+            return None, None
+
+        coarse_source = self._prepare_icp_points(
+            source_points,
+            self._icp_coarse_max_points,
+            voxel_size=max(self._icp_min_correspondence_m * 1.8, 0.007),
+        )
+        coarse_target = self._prepare_icp_points(
+            target_points,
+            self._icp_coarse_max_points,
+            voxel_size=max(self._icp_min_correspondence_m * 1.8, 0.007),
+        )
+        coarse_iterations = max(6, int(round(self._icp_max_iterations * 0.55)))
+        coarse_transform, coarse_metrics = self._icp_stage(
+            coarse_source,
+            coarse_target,
+            max_correspondence_m=self._icp_max_correspondence_m,
+            iterations=coarse_iterations,
+            trim_ratio=self._icp_trim_ratio,
+        )
+        if coarse_transform is None or coarse_metrics is None:
+            return None, None
+
+        fine_source_raw = self._prepare_icp_points(
+            source_points,
+            self._icp_fine_max_points,
+            voxel_size=max(self._icp_min_correspondence_m * 0.9, 0.0035),
+        )
+        fine_target = self._prepare_icp_points(
+            target_points,
+            self._icp_fine_max_points,
+            voxel_size=max(self._icp_min_correspondence_m * 0.9, 0.0035),
+        )
+        fine_source = self._apply_transform(fine_source_raw, coarse_transform)
+        fine_distance = max(
+            self._icp_min_correspondence_m,
+            self._icp_max_correspondence_m * self._icp_stage_distance_decay,
+        )
+        fine_transform, fine_metrics = self._icp_stage(
+            fine_source,
+            fine_target,
+            max_correspondence_m=fine_distance,
+            iterations=self._icp_max_iterations,
+            trim_ratio=min(0.95, max(self._icp_trim_ratio, 0.7)),
+        )
+        if fine_transform is None or fine_metrics is None:
+            return coarse_transform, coarse_metrics
+
+        return fine_transform @ coarse_transform, fine_metrics
+
+    def _icp_stage(
+        self,
+        source: np.ndarray,
+        target: np.ndarray,
+        *,
+        max_correspondence_m: float,
+        iterations: int,
+        trim_ratio: float,
+    ) -> tuple[np.ndarray | None, dict[str, float | int] | None]:
+        if source.shape[0] < 30 or target.shape[0] < 30:
+            return None, None
+
+        current = source.copy()
+        transform_total = np.eye(4, dtype=np.float64)
+        previous_error: float | None = None
+        min_inliers = max(30, int(round(source.shape[0] * 0.08)))
+
+        for _ in range(max(1, int(iterations))):
+            matched, distances = self._nearest_neighbors_with_distance(current, target)
+            inlier_mask = distances <= float(max_correspondence_m)
+            if int(np.count_nonzero(inlier_mask)) < min_inliers:
+                return None, None
+
+            inlier_mask = self._trim_correspondences(inlier_mask, distances, trim_ratio=trim_ratio)
+            inlier_count = int(np.count_nonzero(inlier_mask))
+            if inlier_count < 6:
+                return None, None
+
+            source_inliers = current[inlier_mask]
+            target_inliers = matched[inlier_mask]
+            transform, mean_error = self._rigid_transform(source_inliers, target_inliers)
+            if transform is None or mean_error is None:
+                return None, None
+
+            current = self._apply_transform(current, transform)
+            transform_total = transform @ transform_total
+
+            if previous_error is not None and abs(previous_error - mean_error) < self._icp_tolerance_m:
+                break
+            previous_error = mean_error
+
+        matched_final, distances_final = self._nearest_neighbors_with_distance(current, target)
+        inlier_mask_final = distances_final <= float(max_correspondence_m)
+        inlier_mask_final = self._trim_correspondences(inlier_mask_final, distances_final, trim_ratio=trim_ratio)
+        final_inliers = int(np.count_nonzero(inlier_mask_final))
+        if final_inliers < min_inliers:
+            return None, None
+        mean_error_final = float(np.mean(distances_final[inlier_mask_final]))
+        overlap_ratio = float(final_inliers) / float(max(1, current.shape[0]))
+
+        metrics = {
+            "mean_error_m": mean_error_final,
+            "overlap_ratio": overlap_ratio,
+            "inliers": final_inliers,
+            "samples": int(current.shape[0]),
+        }
+        return transform_total, metrics
+
+    @staticmethod
+    def _nearest_neighbors_with_distance(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        diff = source[:, None, :] - target[None, :, :]
+        distances_sq = np.sum(diff * diff, axis=2)
+        indices = np.argmin(distances_sq, axis=1)
+        nearest = target[indices]
+        nearest_distance = np.sqrt(distances_sq[np.arange(source.shape[0]), indices])
+        return nearest, nearest_distance
+
+    @staticmethod
+    def _trim_correspondences(inlier_mask: np.ndarray, distances: np.ndarray, *, trim_ratio: float) -> np.ndarray:
+        if trim_ratio >= 0.999:
+            return inlier_mask
+        inlier_indices = np.nonzero(inlier_mask)[0]
+        if inlier_indices.size <= 6:
+            return inlier_mask
+        keep_count = max(6, int(round(inlier_indices.size * float(trim_ratio))))
+        ordered_local = np.argsort(distances[inlier_indices])
+        keep_indices = inlier_indices[ordered_local[:keep_count]]
+        trimmed_mask = np.zeros_like(inlier_mask, dtype=bool)
+        trimmed_mask[keep_indices] = True
+        return trimmed_mask
+
+    def _icp_alignment_is_valid(self, transform: np.ndarray, metrics: dict[str, float | int]) -> bool:
+        mean_error_m = float(metrics.get("mean_error_m", 999.0))
+        overlap_ratio = float(metrics.get("overlap_ratio", 0.0))
+        inliers = int(metrics.get("inliers", 0))
+        translation_step_m = float(np.linalg.norm(transform[:3, 3]))
+        rotation_step_deg = self._rotation_angle_deg(transform)
+        if inliers < 30:
+            return False
+        if mean_error_m > self._icp_max_mean_error_m:
+            return False
+        if overlap_ratio < self._icp_overlap_threshold:
+            return False
+        if translation_step_m > self._icp_max_translation_step_m:
+            return False
+        if rotation_step_deg > self._icp_max_rotation_step_deg:
+            return False
+        return True
+
+    def _extend_reference_cloud(self, reference_cloud: np.ndarray, aligned_source: np.ndarray) -> np.ndarray:
+        if aligned_source.size == 0:
+            return reference_cloud
+        combined = np.vstack([reference_cloud, aligned_source])
+        return self._prepare_icp_points(
+            combined,
+            max_points=max(self._icp_coarse_max_points * 5, 15000),
+            voxel_size=max(self._icp_min_correspondence_m * 0.75, 0.003),
+        )
+
+    @staticmethod
+    def _rotation_angle_deg(transform: np.ndarray) -> float:
+        rotation = np.asarray(transform[:3, :3], dtype=np.float64)
+        trace_value = float(np.trace(rotation))
+        cosine = np.clip((trace_value - 1.0) * 0.5, -1.0, 1.0)
+        return float(np.degrees(np.arccos(cosine)))
+
+    @staticmethod
+    def _scale_rigid_transform(transform: np.ndarray, alpha: float) -> np.ndarray:
+        scaled = np.eye(4, dtype=np.float64)
+        clamped_alpha = float(np.clip(alpha, 0.0, 1.0))
+        rotation = np.asarray(transform[:3, :3], dtype=np.float64)
+        translation = np.asarray(transform[:3, 3], dtype=np.float64)
+
+        rvec, _ = cv2.Rodrigues(rotation)
+        rvec = rvec.reshape(3) * clamped_alpha
+        scaled_rotation, _ = cv2.Rodrigues(rvec.reshape(3, 1))
+        scaled[:3, :3] = scaled_rotation
+        scaled[:3, 3] = translation * clamped_alpha
+        return scaled
+
+    def _load_alignment_offsets(self) -> dict[str, np.ndarray]:
+        if not self._persistent_alignment_enabled:
+            return {}
+        if not self._alignment_state_file.is_file():
+            return {}
+        try:
+            payload = json.loads(self._alignment_state_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            LOGGER.warning("Failed to read camera alignment state from %s: %s", self._alignment_state_file, exc)
+            return {}
+
+        raw_offsets = payload.get("camera_offsets", {})
+        if not isinstance(raw_offsets, dict):
+            return {}
+
+        offsets: dict[str, np.ndarray] = {}
+        for camera_id, transform in raw_offsets.items():
+            if not isinstance(camera_id, str):
+                continue
+            matrix = np.asarray(transform, dtype=np.float64)
+            if matrix.shape != (4, 4):
+                continue
+            if not np.all(np.isfinite(matrix)):
+                continue
+            matrix[3, :] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+            offsets[camera_id] = matrix
+
+        if offsets:
+            LOGGER.info("Loaded persistent camera alignment offsets: %s", sorted(offsets))
+        return offsets
+
+    def _save_alignment_offsets(self) -> None:
+        if not self._persistent_alignment_enabled:
+            return
+
+        camera_offsets: dict[str, list[list[float]]] = {}
+        for camera_id, transform in self._camera_alignment_offsets.items():
+            matrix = np.asarray(transform, dtype=np.float64)
+            if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+                continue
+            safe_matrix = matrix.copy()
+            safe_matrix[3, :] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+            camera_offsets[camera_id] = safe_matrix.tolist()
+        payload = {
+            "version": 1,
+            "updated_at_utc": datetime.now(tz=timezone.utc).isoformat(),
+            "camera_offsets": camera_offsets,
+        }
+
+        try:
+            self._alignment_state_file.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self._alignment_state_file.with_suffix(f"{self._alignment_state_file.suffix}.tmp")
+            temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            temp_path.replace(self._alignment_state_file)
+        except Exception as exc:
+            LOGGER.warning("Failed to persist camera alignment offsets to %s: %s", self._alignment_state_file, exc)
+
+    @staticmethod
+    def _rigid_transform(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray | None, float | None]:
+        if source.shape != target.shape or source.shape[0] < 3:
+            return None, None
+
+        source_mean = np.mean(source, axis=0)
+        target_mean = np.mean(target, axis=0)
+        source_centered = source - source_mean
+        target_centered = target - target_mean
+
+        covariance = source_centered.T @ target_centered
+        u, _, vt = np.linalg.svd(covariance)
+        rotation = vt.T @ u.T
+        if np.linalg.det(rotation) < 0:
+            vt[-1, :] *= -1
+            rotation = vt.T @ u.T
+
+        translation = target_mean - rotation @ source_mean
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, :3] = rotation
+        transform[:3, 3] = translation
+
+        aligned = (source @ rotation.T) + translation
+        error = np.linalg.norm(aligned - target, axis=1)
+        return transform, float(np.mean(error))
 
     def _stack_and_process_points(
         self, all_points_world: list[np.ndarray],
@@ -412,7 +869,36 @@ class VolumetricCaptureService:
             colors = np.full((color_camera_points.shape[0], 3), 180, dtype=np.uint8) if write_color else None
         
         world_points = self._camera_to_world(color_camera_points, extrinsics.t_camera_world)
+        camera_offset = self._camera_alignment_offsets.get(camera_id)
+        if camera_offset is not None:
+            world_points = self._apply_transform(world_points, camera_offset)
+        if self._capture_volume_enabled:
+            world_points, colors = self._filter_to_capture_volume(world_points, colors)
+            if world_points.shape[0] == 0:
+                return None, None, f"{camera_id}: no points inside capture volume", "no_points_after_filter"
         return world_points, colors, None, None
+
+    def _filter_to_capture_volume(
+        self,
+        points_world: np.ndarray,
+        colors: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        if points_world.shape[0] == 0:
+            return points_world, colors
+
+        delta = points_world - self._capture_volume_origin_m[None, :]
+        in_volume = np.all(np.abs(delta) <= self._capture_volume_half_extents_m[None, :], axis=1)
+        if self._capture_volume_max_radius_m is not None:
+            radius = np.linalg.norm(delta, axis=1)
+            in_volume &= radius <= float(self._capture_volume_max_radius_m)
+        if not np.any(in_volume):
+            return np.empty((0, 3), dtype=points_world.dtype), (
+                np.empty((0, 3), dtype=colors.dtype) if colors is not None else None
+            )
+
+        filtered_points = points_world[in_volume]
+        filtered_colors = colors[in_volume] if colors is not None else None
+        return filtered_points, filtered_colors
 
     @staticmethod
     def _build_empty_capture_message(selected_camera_ids: list[str], stats: dict[str, int]) -> str:
