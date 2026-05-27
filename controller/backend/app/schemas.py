@@ -122,3 +122,13 @@ class StartRecordingResponse(BaseModel):
 class StopRecordingResponse(BaseModel):
     accepted: bool
     status: RecordingStatusResponse
+
+
+class EmailCaptureRequest(BaseModel):
+    email: str = Field(..., min_length=3)
+    capture_file_name: str | None = None
+
+
+class EmailCaptureResponse(BaseModel):
+    accepted: bool
+    message: str

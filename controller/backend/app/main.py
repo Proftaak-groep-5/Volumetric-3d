@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
 
 from app.api.routes import router
 from app.core.config import get_settings
@@ -18,6 +20,7 @@ from app.services.volumetric_capture import VolumetricCaptureService
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 settings = get_settings()
 
 app = FastAPI(title="Volumetric Controller API", version="0.1.0")
@@ -72,6 +75,10 @@ def _startup_app() -> None:
     app.state.triangulation_service = TriangulationService(camera_manager, calibration_store)
     app.state.repo_root = settings.repo_root
     app.state.blender_update_command = settings.blender_update_command
+    app.state.capture_output_dir = settings.volumetric_capture_output_dir
+    app.state.postmark_server_token = settings.postmark_server_token
+    app.state.postmark_from = settings.postmark_from
+    app.state.postmark_message_stream = settings.postmark_message_stream
     volumetric_capture_service = VolumetricCaptureService(
         camera_manager,
         calibration_store,
