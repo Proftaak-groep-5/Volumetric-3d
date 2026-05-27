@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { CameraGrid } from "@/components/camera-grid";
+import { PlyViewer } from "@/components/ply-viewer";
 import {
     CalibrationRunStatusResponse,
     CameraInfo,
@@ -420,11 +421,9 @@ export default function HomePage() {
                         files: <a href={`${apiBaseUrl}${captureResult.capture_file_url}`} target="_blank" rel="noreferrer">PLY</a> | {" "}
                         <a href={`${apiBaseUrl}${captureResult.preview_image_url}`} target="_blank" rel="noreferrer">Preview</a>
                     </p>
-                    {/* eslint-disable-next-line @next/next/no-img-element -- Backend-generated preview is served directly. */}
-                    <img
-                        src={`${apiBaseUrl}${captureResult.preview_image_url}`}
-                        alt="Top-down stitched point cloud preview"
-                        className="capture-preview"
+                    <PlyViewer
+                        className="capture-preview-3d"
+                        src={`${apiBaseUrl}${captureResult.capture_file_url}`}
                     />
                 </section>
             )}

@@ -263,6 +263,16 @@ button.secondary {
     display: block;
 }
 
+.capture-preview-3d {
+    margin-top: 0.7rem;
+    width: min(720px, 100%);
+    height: min(420px, 70vh);
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: rgba(5, 10, 13, 0.8);
+    overflow: hidden;
+}
+
 .demo-shell {
     width: min(1180px, 100% - 2rem);
     margin: 1.5rem auto 3rem;
