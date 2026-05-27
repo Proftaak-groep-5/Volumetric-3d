@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 
 from calibration.calibration.aruco_cube import ArucoCubeModel
 from calibration.calibration.detector import MarkerDetection
+from calibration.camera.base import CameraIntrinsics
 from calibration.math3d.transforms import (
     average_transforms,
     compose_transforms,
@@ -70,6 +72,125 @@ def marker_detections_to_cube_observations(
         )
 
     return observations
+
+
+def _collect_cube_pnp_points(
+    detections: Sequence[MarkerDetection],
+    cube_model: ArucoCubeModel,
+) -> tuple[np.ndarray, np.ndarray, List[int]]:
+    object_points: List[np.ndarray] = []
+    image_points: List[np.ndarray] = []
+    marker_ids: List[int] = []
+
+    marker_corners_marker = cube_model.marker_corners_marker_frame()
+
+    for detection in detections:
+        if detection.corners is None:
+            continue
+
+        face_name = cube_model.marker_id_to_face(detection.marker_id)
+        if face_name is None:
+            continue
+
+        face_transform = cube_model.get_transform_for_marker_id(detection.marker_id)
+        t_cube_marker = face_transform.t_cube_marker
+
+        corners_2d = np.asarray(detection.corners, dtype=np.float64).reshape(4, 2)
+        if corners_2d.shape != (4, 2):
+            continue
+
+        for corner in marker_corners_marker:
+            corner_h = np.array([corner[0], corner[1], corner[2], 1.0], dtype=np.float64)
+            corner_cube = (t_cube_marker @ corner_h)[:3]
+            object_points.append(corner_cube)
+
+        image_points.extend([pt for pt in corners_2d])
+        marker_ids.append(int(detection.marker_id))
+
+    if not object_points or not image_points:
+        return np.empty((0, 3), dtype=np.float64), np.empty((0, 2), dtype=np.float64), []
+
+    return (
+        np.asarray(object_points, dtype=np.float64).reshape(-1, 3),
+        np.asarray(image_points, dtype=np.float64).reshape(-1, 2),
+        marker_ids,
+    )
+
+
+def estimate_frame_cube_pose_from_corners(
+    detections: Sequence[MarkerDetection],
+    cube_model: ArucoCubeModel,
+    intrinsics: CameraIntrinsics,
+    min_markers_per_frame: int,
+    max_reprojection_error_px: float,
+) -> Optional[FrameCubePoseEstimate]:
+    object_points, image_points, marker_ids = _collect_cube_pnp_points(detections, cube_model)
+
+    if len(marker_ids) < min_markers_per_frame or object_points.shape[0] < 4:
+        return None
+
+    intrinsics.validate()
+    camera_matrix = np.asarray(intrinsics.camera_matrix, dtype=np.float64)
+    dist_coeffs = np.asarray(intrinsics.dist_coeffs, dtype=np.float64)
+
+    try:
+        success, rvec, tvec = cv2.solvePnP(
+            object_points,
+            image_points,
+            camera_matrix,
+            dist_coeffs,
+            flags=int(cv2.SOLVEPNP_ITERATIVE),
+        )
+    except Exception:
+        return None
+
+    if not success:
+        return None
+
+    projected, _ = cv2.projectPoints(
+        object_points,
+        np.asarray(rvec, dtype=np.float64).reshape(3, 1),
+        np.asarray(tvec, dtype=np.float64).reshape(3, 1),
+        camera_matrix,
+        dist_coeffs,
+    )
+    projected_2d = projected.reshape(-1, 2)
+    reprojection_errors = np.linalg.norm(projected_2d - image_points, axis=1)
+    mean_reprojection_error_px = float(np.mean(reprojection_errors))
+
+    if mean_reprojection_error_px > max_reprojection_error_px:
+        return None
+
+    t_camera_cube = rvec_tvec_to_transform(rvec, tvec)
+
+    observations = marker_detections_to_cube_observations(detections, cube_model)
+    if not observations:
+        return None
+
+    translation_residuals = np.array(
+        [
+            np.linalg.norm(obs.t_camera_cube[:3, 3] - t_camera_cube[:3, 3])
+            for obs in observations
+        ],
+        dtype=np.float64,
+    )
+    rotation_residuals = np.array(
+        [
+            rotation_angle_deg(obs.t_camera_cube[:3, :3], t_camera_cube[:3, :3])
+            for obs in observations
+        ],
+        dtype=np.float64,
+    )
+
+    return FrameCubePoseEstimate(
+        t_camera_cube=t_camera_cube,
+        marker_ids=sorted(set(marker_ids)),
+        used_observation_count=len(observations),
+        total_observation_count=len(observations),
+        mean_reprojection_error_px=mean_reprojection_error_px,
+        translation_spread_m=float(np.std(translation_residuals)) if translation_residuals.size else 0.0,
+        rotation_spread_deg=float(np.std(rotation_residuals)) if rotation_residuals.size else 0.0,
+    )
 
 
 def _is_inlier(

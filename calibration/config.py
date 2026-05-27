@@ -41,6 +41,8 @@ class QualityConfig:
     max_rotation_std_deg: float = 3.5
     depth_distance_tolerance_m: float = 0.08
     depth_distance_tolerance_pct: float = 12.0
+    use_pnp_corners: bool = True
+    pnp_fallback_to_markers: bool = True
 
     def validate(self) -> None:
         if self.min_markers_per_frame < 1:
@@ -221,6 +223,8 @@ class CalibrationConfig:
             depth_distance_tolerance_pct=float(
                 quality_payload.get("depth_distance_tolerance_pct", payload.get("depth_distance_tolerance_pct", 12.0))
             ),
+            use_pnp_corners=bool(quality_payload.get("use_pnp_corners", True)),
+            pnp_fallback_to_markers=bool(quality_payload.get("pnp_fallback_to_markers", True)),
         )
 
         debug = DebugConfig(
@@ -333,6 +337,8 @@ class CalibrationConfig:
                 "max_rotation_std_deg": self.quality.max_rotation_std_deg,
                 "depth_distance_tolerance_m": self.quality.depth_distance_tolerance_m,
                 "depth_distance_tolerance_pct": self.quality.depth_distance_tolerance_pct,
+                "use_pnp_corners": self.quality.use_pnp_corners,
+                "pnp_fallback_to_markers": self.quality.pnp_fallback_to_markers,
             },
             "debug": {
                 "enabled": self.debug.enabled,

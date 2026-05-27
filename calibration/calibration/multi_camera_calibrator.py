@@ -11,6 +11,7 @@ import numpy.typing as npt
 from calibration.calibration.aruco_cube import ArucoCubeModel
 from calibration.calibration.detector import ArucoMarkerDetector
 from calibration.calibration.pose_estimation import (
+    estimate_frame_cube_pose_from_corners,
     estimate_frame_cube_pose,
     marker_detections_to_cube_observations,
 )
@@ -32,6 +33,8 @@ class FrameCalibrationRecord:
     markers_used: int
     markers_total: int
     mean_reprojection_error_px: Optional[float]
+    pose_method: Optional[str]
+    pnp_reprojection_error_px: Optional[float]
     translation_spread_m: Optional[float]
     rotation_spread_deg: Optional[float]
     t_camera_cube: Optional[ArrayF64]
@@ -248,12 +251,33 @@ class MultiCameraCalibrator:
             state.marker_ids_seen.add(obs.marker_id)
             state.reprojection_errors.append(obs.reprojection_error_px)
 
-        frame_pose = estimate_frame_cube_pose(
-            observations=observations,
-            min_markers_per_frame=self._config.quality.min_markers_per_frame,
-            marker_outlier_translation_m=self._config.quality.marker_outlier_translation_m,
-            marker_outlier_rotation_deg=self._config.quality.marker_outlier_rotation_deg,
-        )
+        frame_pose = None
+        pose_method: Optional[str] = None
+        pnp_reprojection_error_px: Optional[float] = None
+
+        if self._config.quality.use_pnp_corners:
+            frame_pose = estimate_frame_cube_pose_from_corners(
+                detections=detections,
+                cube_model=self._cube_model,
+                intrinsics=intrinsics,
+                min_markers_per_frame=self._config.quality.min_markers_per_frame,
+                max_reprojection_error_px=self._config.quality.max_reprojection_error_px,
+            )
+            if frame_pose is not None:
+                pose_method = "pnp_corners"
+                pnp_reprojection_error_px = frame_pose.mean_reprojection_error_px
+
+        if frame_pose is None and (not self._config.quality.use_pnp_corners or self._config.quality.pnp_fallback_to_markers):
+            frame_pose = estimate_frame_cube_pose(
+                observations=observations,
+                min_markers_per_frame=self._config.quality.min_markers_per_frame,
+                marker_outlier_translation_m=self._config.quality.marker_outlier_translation_m,
+                marker_outlier_rotation_deg=self._config.quality.marker_outlier_rotation_deg,
+            )
+            pose_method = "marker_average"
+
+        if frame_pose is None and pose_method is None:
+            pose_method = "pnp_corners"
 
         if frame_pose is None:
             reason = "insufficient_observations"
@@ -265,6 +289,8 @@ class MultiCameraCalibrator:
                 reject_reason=reason,
                 marker_ids=sorted({obs.marker_id for obs in observations}),
                 markers_total=len(observations),
+                pose_method=pose_method,
+                pnp_reprojection_error_px=pnp_reprojection_error_px,
             )
         else:
             t_camera_cube = frame_pose.t_camera_cube
@@ -292,6 +318,8 @@ class MultiCameraCalibrator:
                 markers_used=frame_pose.used_observation_count,
                 markers_total=frame_pose.total_observation_count,
                 mean_reprojection_error_px=frame_pose.mean_reprojection_error_px,
+                pose_method=pose_method,
+                pnp_reprojection_error_px=pnp_reprojection_error_px,
                 translation_spread_m=frame_pose.translation_spread_m,
                 rotation_spread_deg=frame_pose.rotation_spread_deg,
                 t_camera_cube=t_camera_cube,
@@ -335,6 +363,8 @@ class MultiCameraCalibrator:
         reject_reason: str,
         marker_ids: Optional[List[int]] = None,
         markers_total: int = 0,
+        pose_method: Optional[str] = None,
+        pnp_reprojection_error_px: Optional[float] = None,
     ) -> FrameCalibrationRecord:
         return FrameCalibrationRecord(
             frame_index=frame_index,
@@ -344,6 +374,8 @@ class MultiCameraCalibrator:
             markers_used=0,
             markers_total=markers_total,
             mean_reprojection_error_px=None,
+            pose_method=pose_method,
+            pnp_reprojection_error_px=pnp_reprojection_error_px,
             translation_spread_m=None,
             rotation_spread_deg=None,
             t_camera_cube=None,

@@ -124,6 +124,8 @@ def _frame_record_to_dict(record: FrameCalibrationRecord) -> Dict[str, Any]:
         "markers_used": record.markers_used,
         "markers_total": record.markers_total,
         "mean_reprojection_error_px": record.mean_reprojection_error_px,
+        "pose_method": record.pose_method,
+        "pnp_reprojection_error_px": record.pnp_reprojection_error_px,
         "translation_spread_m": record.translation_spread_m,
         "rotation_spread_deg": record.rotation_spread_deg,
         "T_camera_cube": _matrix_or_none(record.t_camera_cube),
