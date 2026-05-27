@@ -72,6 +72,9 @@ class CameraStreamManager:
         self._lock = threading.Lock()
         self._camera_locks: dict[str, threading.Lock] = {}
         self._failed_camera_ids: set[str] = set()
+        self._network_preview_enabled = True
+        self._discovery_thread: threading.Thread | None = None
+        self._previously_discovered_ids: set[str] = set()
 
     def start(self) -> None:
         if self._running:
@@ -85,6 +88,7 @@ class CameraStreamManager:
         self._failed_camera_ids.clear()
         self._camera_by_id.clear()
         self._camera_locks.clear()
+        self._network_preview_enabled = True
 
         network_cameras = discover_network_api_cameras(
             use_depth=self._use_depth,
@@ -150,11 +154,24 @@ class CameraStreamManager:
             thread.start()
             self._threads[camera.camera_id] = thread
 
+        # Start discovery thread to auto-configure newly connected cameras
+        self._previously_discovered_ids = set(cam.camera_id for cam in self._cameras if isinstance(cam, NetworkApiCamera))
+        self._discovery_thread = threading.Thread(
+            target=self._discovery_loop,
+            name="camera-discovery",
+            daemon=True,
+        )
+        self._discovery_thread.start()
+
     def stop(self) -> None:
         self._running = False
         for thread in self._threads.values():
             thread.join(timeout=2.0)
         self._threads.clear()
+
+        if self._discovery_thread is not None and self._discovery_thread.is_alive():
+            self._discovery_thread.join(timeout=2.0)
+        self._discovery_thread = None
 
         for camera in self._cameras:
             camera.stop()
@@ -192,6 +209,38 @@ class CameraStreamManager:
                 )
             except Exception as exc:
                 LOGGER.warning("Failed to configure network camera %s via HTTP settings: %s", camera.camera_id, exc)
+
+    def _discovery_loop(self) -> None:
+        """Periodically discover new cameras and auto-configure them."""
+        discovery_interval_s = 5.0  # Check for new cameras every 5 seconds
+        while self._running:
+            try:
+                time.sleep(discovery_interval_s)
+                if not self._running:
+                    break
+
+                # Discover cameras
+                discovered_cameras = discover_network_api_cameras(
+                    use_depth=self._use_depth,
+                    allowed_camera_ids=None,
+                    discovery_config=self._network_camera,
+                )
+                discovered_ids = {cam.camera_id for cam in discovered_cameras}
+
+                # Find newly discovered cameras
+                new_camera_ids = discovered_ids - self._previously_discovered_ids
+                if new_camera_ids:
+                    new_cameras = [cam for cam in discovered_cameras if cam.camera_id in new_camera_ids]
+                    LOGGER.info("Discovered %d new camera(s): %s", len(new_cameras), [cam.camera_id for cam in new_cameras])
+
+                    # Configure the new cameras
+                    self._configure_network_cameras(new_cameras)
+
+                    # Update tracking
+                    self._previously_discovered_ids.update(new_camera_ids)
+
+            except Exception as exc:
+                LOGGER.debug("Error in camera discovery loop: %s", exc)
 
     def configure_network_camera_streams(self, camera_ids: list[str] | None = None) -> dict[str, dict[str, str | bool | int]]:
         selected_ids = set(camera_ids or [])
@@ -261,6 +310,9 @@ class CameraStreamManager:
         while self._running:
             loop_started = time.perf_counter()
             if isinstance(camera, NetworkApiCamera):
+                if not self._network_preview_enabled:
+                    time.sleep(sleep_s)
+                    continue
                 try:
                     with self._camera_locks[camera.camera_id]:
                         preview = camera.get_preview_jpeg(timeout_ms=200)
@@ -271,7 +323,13 @@ class CameraStreamManager:
 
                 if preview is not None:
                     jpeg_bytes, frame_index = preview
-                    self._update_jpeg_snapshot_bytes(camera.camera_id, jpeg_bytes, frame_index)
+                    # Try to get actual streaming resolution from NUC metadata
+                    actual_resolution = camera.get_actual_color_resolution()
+                    if actual_resolution:
+                        width, height = actual_resolution
+                        self._update_jpeg_snapshot_bytes(camera.camera_id, jpeg_bytes, frame_index, width=width, height=height)
+                    else:
+                        self._update_jpeg_snapshot_bytes(camera.camera_id, jpeg_bytes, frame_index)
 
                 elapsed_s = time.perf_counter() - loop_started
                 if elapsed_s < sleep_s:
@@ -370,6 +428,7 @@ class CameraStreamManager:
         timeout_ms: int = 500,
         require_depth: bool = False,
         max_attempts: int = 8,
+        prefer_depth_only: bool = False,
     ) -> RawFrameSnapshot | None:
         target = self._camera_by_id.get(camera_id)
         if target is None:
@@ -378,7 +437,20 @@ class CameraStreamManager:
         attempts = max(1, int(max_attempts))
         for _ in range(attempts):
             with self._camera_locks[camera_id]:
-                frame = target.get_frame(timeout_ms=timeout_ms)
+                if require_depth and prefer_depth_only and isinstance(target, NetworkApiCamera):
+                    frame = target.get_depth_frame(timeout_ms=timeout_ms)
+                else:
+                    frame = target.get_frame(timeout_ms=timeout_ms)
+                    # Network cameras can intermittently return color without depth.
+                    # When depth is mandatory, retry the same attempt with depth-only fetch.
+                    if (
+                        require_depth
+                        and isinstance(target, NetworkApiCamera)
+                        and (frame is None or frame.depth is None)
+                    ):
+                        depth_only_frame = target.get_depth_frame(timeout_ms=timeout_ms)
+                        if depth_only_frame is not None:
+                            frame = depth_only_frame
             if frame is None:
                 continue
 
@@ -539,3 +611,6 @@ class CameraStreamManager:
                 }
             )
         return details
+
+    def set_network_preview_enabled(self, enabled: bool) -> None:
+        self._network_preview_enabled = bool(enabled)

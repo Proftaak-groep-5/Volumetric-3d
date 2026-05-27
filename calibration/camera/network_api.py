@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 import socket
 import time
 import urllib.error
@@ -18,6 +19,17 @@ import numpy as np
 from calibration.camera.base import CameraDevice, CameraFrame, CameraIntrinsics
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_SUBNET = "192.168.137.0/24"
+DEFAULT_ACCEPT_HEADER = "application/json"
+DEFAULT_USER_AGENT = "volumetric-3d-network-camera/1.0"
+_SNAPSHOT_IO_WORKERS = min(64, max(4, int(os.getenv("NETWORK_SNAPSHOT_IO_WORKERS", "16"))))
+_SNAPSHOT_IO_EXECUTOR = ThreadPoolExecutor(max_workers=_SNAPSHOT_IO_WORKERS, thread_name_prefix="network-snapshot")
+_PARALLEL_COLOR_DEPTH_FETCH = os.getenv("NETWORK_PARALLEL_COLOR_DEPTH_FETCH", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _depth_scale_to_meters(scale_value: float | None) -> float | None:
@@ -33,7 +45,7 @@ def _depth_scale_to_meters(scale_value: float | None) -> float | None:
 @dataclass(frozen=True)
 class NetworkCameraDiscoveryConfig:
     enabled: bool = True
-    subnet: str = "192.168.137.0/24"
+    subnet: str = DEFAULT_SUBNET
     ips: tuple[str, ...] = ()
     ports: tuple[int, ...] = (8080,)
     timeout_ms: int = 350
@@ -67,7 +79,7 @@ class NetworkCameraDiscoveryConfig:
 
         return cls(
             enabled=bool(payload.get("enabled", True)),
-            subnet=str(payload.get("subnet", "192.168.137.0/24")).strip() or "192.168.137.0/24",
+            subnet=str(payload.get("subnet", DEFAULT_SUBNET)).strip() or DEFAULT_SUBNET,
             ips=ips,
             ports=ports or (8080,),
             timeout_ms=max(50, timeout_ms),
@@ -104,8 +116,8 @@ def _http_json(url: str, *, timeout_s: float) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         headers={
-            "Accept": "application/json",
-            "User-Agent": "volumetric-3d-network-camera/1.0",
+            "Accept": DEFAULT_ACCEPT_HEADER,
+            "User-Agent": DEFAULT_USER_AGENT,
         },
     )
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
@@ -122,12 +134,12 @@ def _http_json_request(
 ) -> dict[str, Any]:
     body = None
     headers = {
-        "Accept": "application/json",
-        "User-Agent": "volumetric-3d-network-camera/1.0",
+        "Accept": DEFAULT_ACCEPT_HEADER,
+        "User-Agent": DEFAULT_USER_AGENT,
     }
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
+        headers["Content-Type"] = DEFAULT_ACCEPT_HEADER
 
     request = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
@@ -136,7 +148,7 @@ def _http_json_request(
 
 
 def _http_bytes(url: str, *, timeout_s: float) -> tuple[bytes, Mapping[str, str]]:
-    request = urllib.request.Request(url, headers={"User-Agent": "volumetric-3d-network-camera/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": DEFAULT_USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
         return response.read(), dict(response.headers.items())
 
@@ -205,6 +217,7 @@ class NetworkApiCamera(CameraDevice):
         use_depth: bool,
         timeout_ms: int,
         depth_scale_m: float | None,
+        depth_alignment_enabled: bool = False,
     ) -> None:
         self._camera_id = camera_id
         self._base_url = base_url.rstrip("/")
@@ -217,6 +230,7 @@ class NetworkApiCamera(CameraDevice):
         self._use_depth = bool(use_depth)
         self._timeout_ms = int(timeout_ms)
         self._depth_scale_m = float(depth_scale_m) if depth_scale_m is not None else None
+        self._depth_alignment_enabled = bool(depth_alignment_enabled)
         self._frame_index = 0
         self._started = False
 
@@ -258,14 +272,34 @@ class NetworkApiCamera(CameraDevice):
         return self._intrinsics
 
     def get_depth_intrinsics(self) -> CameraIntrinsics | None:
+        if self._depth_alignment_enabled:
+            return self._intrinsics
         return self._depth_intrinsics
 
     def get_depth_to_color_transform(self) -> np.ndarray | None:
+        if self._depth_alignment_enabled:
+            return None
         if self._depth_to_color_transform is None:
             return None
         return self._depth_to_color_transform.copy()
 
-    def apply_stream_configuration(
+    def get_actual_color_resolution(self) -> tuple[int, int] | None:
+        """Fetch actual streaming color resolution from NUC metadata (may differ from config if unsupported)."""
+        try:
+            timeout_s = max(0.05, float(self._timeout_ms) / 1000.0)
+            metadata = _http_json(f"{self._base_url}/metadata", timeout_s=timeout_s)
+            current_profiles = metadata.get("current_profiles", {})
+            if current_profiles:
+                color_profile = current_profiles.get("color", {})
+                width = color_profile.get("width")
+                height = color_profile.get("height")
+                if width is not None and height is not None:
+                    return (int(width), int(height))
+        except Exception:
+            pass
+        return None
+
+    def apply_stream_configuration(  # noqa: C901
         self,
         *,
         color_width: int,
@@ -277,45 +311,12 @@ class NetworkApiCamera(CameraDevice):
         camera_tuning: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         timeout_s = max(0.1, float(self._timeout_ms) / 1000.0)
-
         config_timeout_s = max(timeout_s, 2.0)
-        payload: dict[str, Any] = {
-            "color": {
-                "width": int(color_width),
-                "height": int(color_height),
-                "fps": int(fps),
-            },
-            "depth": {
-                "width": int(depth_width),
-                "height": int(depth_height),
-                "fps": int(fps),
-            },
-        }
-        if align_to_color is not None:
-            payload["depth"]["align_to_color"] = bool(align_to_color)
-        if camera_tuning:
-            color_payload = payload["color"]
-            tuning_field_map = {
-                "color_auto_exposure": "exposure_auto",
-                "color_exposure": "exposure_value",
-                "color_gain": "gain",
-                "color_auto_white_balance": "white_balance_auto",
-                "color_white_balance": "white_balance_value",
-                "color_brightness": "brightness",
-                "color_contrast": "contrast",
-                "color_saturation": "saturation",
-            }
-            for source_key, target_key in tuning_field_map.items():
-                value = camera_tuning.get(source_key)
-                if value is None:
-                    continue
-                color_payload[target_key] = bool(value) if isinstance(value, bool) else int(value)
-
-            # Avoid forcing manual values while auto modes are enabled.
-            if bool(color_payload.get("exposure_auto", True)):
-                color_payload.pop("exposure_value", None)
-            if bool(color_payload.get("white_balance_auto", True)):
-                color_payload.pop("white_balance_value", None)
+        
+        payload = self._build_stream_config(
+            color_width, color_height, depth_width, depth_height, fps,
+            align_to_color, camera_tuning
+        )
 
         response = _http_json_request(
             f"{self._base_url}/settings",
@@ -333,67 +334,232 @@ class NetworkApiCamera(CameraDevice):
                 method="POST",
                 payload={},
             )
-            # Give the camera pipeline a short settle window before metadata refresh retries.
             time.sleep(0.5)
 
-        self.refresh_metadata(timeout_s=max(config_timeout_s, 2.0), retries=5, retry_delay_s=0.25)
+        # Refresh cached calibration after any settings change so callers see the current stream geometry.
+        self.refresh_metadata(timeout_s=config_timeout_s, retries=2, retry_delay_s=0.25)
+
         return response
 
-    def refresh_metadata(self, *, timeout_s: float | None = None, retries: int = 1, retry_delay_s: float = 0.0) -> None:
+    def _build_stream_config(
+        self,
+        color_width: int,
+        color_height: int,
+        depth_width: int,
+        depth_height: int,
+        fps: int,
+        align_to_color: bool | None,
+        camera_tuning: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Build stream configuration payload."""
+        payload: dict[str, Any] = {
+            "color": {
+                "width": int(color_width),
+                "height": int(color_height),
+                "fps": int(fps),
+            },
+            "depth": {
+                "width": int(depth_width),
+                "height": int(depth_height),
+                "fps": int(fps),
+            },
+        }
+        if align_to_color is not None:
+            payload["depth"]["align_to_color"] = bool(align_to_color)
+        if camera_tuning:
+            self._apply_color_tuning(payload["color"], camera_tuning)
+        return payload
+
+    def _apply_color_tuning(self, color_payload: dict[str, Any], camera_tuning: Mapping[str, Any]) -> None:
+        """Apply color tuning settings to payload."""
+        tuning_field_map = {
+            "color_auto_exposure": "exposure_auto",
+            "color_exposure": "exposure_value",
+            "color_gain": "gain",
+            "color_auto_white_balance": "white_balance_auto",
+            "color_white_balance": "white_balance_value",
+            "color_brightness": "brightness",
+            "color_contrast": "contrast",
+            "color_saturation": "saturation",
+        }
+        for source_key, target_key in tuning_field_map.items():
+            value = camera_tuning.get(source_key)
+            if value is None:
+                continue
+            color_payload[target_key] = bool(value) if isinstance(value, bool) else int(value)
+
+        # Avoid forcing manual values while auto modes are enabled.
+        if bool(color_payload.get("exposure_auto", True)):
+            color_payload.pop("exposure_value", None)
+        if bool(color_payload.get("white_balance_auto", True)):
+            color_payload.pop("white_balance_value", None)
+
+    def refresh_metadata(self, *, timeout_s: float | None = None, retries: int = 1, retry_delay_s: float = 0.0) -> None:  # noqa: C901
         request_timeout_s = max(0.1, float(self._timeout_ms) / 1000.0) if timeout_s is None else max(0.1, float(timeout_s))
         attempts = max(1, int(retries))
-        last_error: Exception | None = None
-        metadata: dict[str, Any] | None = None
+        
+        metadata = self._fetch_metadata_with_retries(request_timeout_s, attempts, retry_delay_s)
+        if metadata is None:
+            raise RuntimeError(f"Failed to refresh network camera metadata for {self._camera_id}")
+        
+        self._parse_and_store_metadata(metadata)
+
+    def _fetch_metadata_with_retries(
+        self, timeout_s: float, attempts: int, retry_delay_s: float
+    ) -> dict[str, Any] | None:
+        """Fetch metadata with retry logic."""
         for attempt in range(1, attempts + 1):
             try:
-                metadata = _http_json(f"{self._base_url}/metadata", timeout_s=request_timeout_s)
-                break
-            except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
-                last_error = exc
+                return _http_json(f"{self._base_url}/metadata", timeout_s=timeout_s)
+            except (TimeoutError, urllib.error.URLError, socket.timeout, ValueError) as exc:
                 if attempt < attempts:
                     time.sleep(max(0.0, float(retry_delay_s)))
                     continue
                 raise RuntimeError(
                     f"Failed to refresh network camera metadata for {self._camera_id} after {attempts} attempt(s): {exc}"
                 ) from exc
+        return None
 
-        if metadata is None:
-            if last_error is not None:
-                raise RuntimeError(f"Failed to refresh network camera metadata for {self._camera_id}: {last_error}") from last_error
-            raise RuntimeError(f"Failed to refresh network camera metadata for {self._camera_id}")
+    def _parse_and_store_metadata(self, metadata: dict[str, Any]) -> None:
+        """Parse metadata and store camera parameters."""
         calibration = metadata.get("calibration")
         if not isinstance(calibration, Mapping):
             raise RuntimeError(f"Network camera {self._camera_id} returned no calibration metadata after restart")
 
-        color_intrinsics = _intrinsics_from_payload(
-            calibration.get("color_intrinsic") if calibration.get("color_intrinsic") is not None else calibration.get("color")
-        )
+        color_intrinsics = self._get_intrinsics_from_calibration(calibration, "color")
         if color_intrinsics is None:
             raise RuntimeError(f"Network camera {self._camera_id} returned invalid color intrinsics after restart")
 
-        depth_intrinsics = _intrinsics_from_payload(
-            calibration.get("depth_intrinsic") if calibration.get("depth_intrinsic") is not None else calibration.get("depth")
-        )
-        depth_to_color_transform = _depth_to_color_transform_from_payload(
-            calibration.get("depth_to_color_extrinsic")
-            if calibration.get("depth_to_color_extrinsic") is not None
-            else calibration.get("depth_to_color")
-        )
+        depth_intrinsics = self._get_intrinsics_from_calibration(calibration, "depth")
+        depth_to_color_transform = self._get_depth_to_color_from_calibration(calibration)
 
         self._intrinsics = color_intrinsics
         self._depth_intrinsics = depth_intrinsics
         self._depth_to_color_transform = None if depth_to_color_transform is None else np.asarray(depth_to_color_transform, dtype=np.float64)
+        self._depth_alignment_enabled = bool(calibration.get("depth_alignment_enabled", False))
         self._depth_scale_m = _depth_scale_to_meters(metadata.get("depth_scale"))
 
-    def get_frame(self, timeout_ms: int = 1000) -> CameraFrame | None:
+    def _get_intrinsics_from_calibration(self, calibration: Mapping[str, Any], prefix: str) -> np.ndarray | None:
+        """Extract intrinsics from calibration data."""
+        intrinsic_key = f"{prefix}_intrinsic"
+        value = calibration.get(intrinsic_key) if calibration.get(intrinsic_key) is not None else calibration.get(prefix)
+        return _intrinsics_from_payload(value)
+
+    def _get_depth_to_color_from_calibration(self, calibration: Mapping[str, Any]) -> list[list[float]] | None:
+        """Extract depth-to-color transform from calibration data."""
+        extrinsic_key = "depth_to_color_extrinsic"
+        value = (
+            calibration.get(extrinsic_key)
+            if calibration.get(extrinsic_key) is not None
+            else calibration.get("depth_to_color")
+        )
+        return _depth_to_color_transform_from_payload(value)
+
+    def get_frame(self, timeout_ms: int = 1000) -> CameraFrame | None:  # noqa: C901
         if not self._started:
             raise RuntimeError(f"Camera {self._camera_id} is not started")
 
         timeout_s = max(0.05, float(timeout_ms if timeout_ms > 0 else self._timeout_ms) / 1000.0)
+        
+        if self._use_depth and _PARALLEL_COLOR_DEPTH_FETCH:
+            color_payload, depth_payload = self._fetch_parallel(timeout_s)
+        else:
+            color_payload = self._fetch_color_snapshot(timeout_s)
+            depth_payload = self._fetch_depth_snapshot(timeout_s) if self._use_depth else None
+
+        if color_payload is None:
+            return None
+        
+        return self._build_frame(color_payload, depth_payload)
+
+    def _fetch_parallel(self, timeout_s: float) -> tuple[tuple[np.ndarray, bytes] | None, tuple[np.ndarray, float | None] | None]:
+        """Fetch color and depth in parallel."""
+        color_future = _SNAPSHOT_IO_EXECUTOR.submit(_http_bytes, f"{self._base_url}/snapshot/color.jpg", timeout_s=timeout_s)
+        depth_future = _SNAPSHOT_IO_EXECUTOR.submit(_http_bytes, f"{self._base_url}/snapshot/depth.png", timeout_s=timeout_s)
+
+        color_bytes: bytes | None = None
+        depth_bytes: bytes | None = None
+        depth_headers: Mapping[str, str] | None = None
+
+        try:
+            color_bytes, _ = color_future.result()
+        except (TimeoutError, urllib.error.URLError, socket.timeout, ValueError) as exc:
+            LOGGER.debug("Network camera color fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
+
+        try:
+            depth_bytes, depth_headers = depth_future.result()
+        except (TimeoutError, urllib.error.URLError, socket.timeout, ValueError) as exc:
+            LOGGER.debug("Network camera depth fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
+
+        color_payload = self._decode_color_snapshot_bytes(color_bytes)
+        depth_payload = self._decode_depth_snapshot_bytes(depth_bytes, depth_headers or {}) if depth_bytes is not None else None
+        return color_payload, depth_payload
+
+    def _build_frame(
+        self,
+        color_payload: tuple[np.ndarray, bytes],
+        depth_payload: tuple[np.ndarray, float | None] | None,
+    ) -> CameraFrame:
+        """Build a CameraFrame from payloads."""
+        color_array, color_bytes = color_payload
+        
+        depth_frame: np.ndarray | None = None
+        depth_scale_m = self._depth_scale_m
+        if depth_payload is not None:
+            depth_frame, header_depth_scale = depth_payload
+            if header_depth_scale is not None:
+                depth_scale_m = header_depth_scale
+
+        return CameraFrame(
+            camera_id=self._camera_id,
+            frame_index=self._next_frame_index(),
+            timestamp_ns=time.time_ns(),
+            color=color_array,
+            color_jpeg=color_bytes,
+            depth=None if depth_frame is None else np.asarray(depth_frame, dtype=np.uint16),
+            depth_scale_m=depth_scale_m,
+        )
+
+    def get_depth_frame(self, timeout_ms: int = 1000) -> CameraFrame | None:
+        if not self._started:
+            raise RuntimeError(f"Camera {self._camera_id} is not started")
+
+        timeout_s = max(0.02, float(timeout_ms if timeout_ms > 0 else self._timeout_ms) / 1000.0)
+        depth_payload = self._fetch_depth_snapshot(timeout_s)
+        if depth_payload is None:
+            return None
+        depth_frame, depth_scale_m = depth_payload
+
+        return CameraFrame(
+            camera_id=self._camera_id,
+            frame_index=self._next_frame_index(),
+            timestamp_ns=time.time_ns(),
+            color=None,
+            color_jpeg=None,
+            depth=np.asarray(depth_frame, dtype=np.uint16),
+            depth_scale_m=depth_scale_m if depth_scale_m is not None else self._depth_scale_m,
+        )
+
+    def _fetch_color_snapshot(self, timeout_s: float) -> tuple[np.ndarray, bytes] | None:
         try:
             color_bytes, _ = _http_bytes(f"{self._base_url}/snapshot/color.jpg", timeout_s=timeout_s)
-        except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, ValueError) as exc:
+        except (TimeoutError, urllib.error.URLError, socket.timeout, ValueError) as exc:
             LOGGER.debug("Network camera color fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
+            return None
+
+        return self._decode_color_snapshot_bytes(color_bytes)
+
+    def _fetch_depth_snapshot(self, timeout_s: float) -> tuple[np.ndarray, float | None] | None:
+        try:
+            depth_bytes, headers = _http_bytes(f"{self._base_url}/snapshot/depth.png", timeout_s=timeout_s)
+        except (TimeoutError, urllib.error.URLError, socket.timeout, ValueError) as exc:
+            LOGGER.debug("Network camera depth fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
+            return None
+
+        return self._decode_depth_snapshot_bytes(depth_bytes, headers)
+
+    def _decode_color_snapshot_bytes(self, color_bytes: bytes | None) -> tuple[np.ndarray, bytes] | None:
+        if color_bytes is None:
             return None
 
         color_array = cv2.imdecode(np.frombuffer(color_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -401,29 +567,30 @@ class NetworkApiCamera(CameraDevice):
             LOGGER.warning("Network camera %s returned undecodable color snapshot", self._camera_id)
             return None
 
-        depth_frame = None
-        depth_scale_m = self._depth_scale_m
-        if self._use_depth:
-            try:
-                depth_bytes, headers = _http_bytes(f"{self._base_url}/snapshot/depth.png", timeout_s=timeout_s)
-                depth_frame = cv2.imdecode(np.frombuffer(depth_bytes, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-                header_scale = headers.get("X-Depth-Scale") or headers.get("x-depth-scale")
-                if header_scale:
-                    depth_scale_m = _depth_scale_to_meters(float(header_scale))
-            except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, ValueError) as exc:
-                LOGGER.debug("Network camera depth fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
-                depth_frame = None
+        return color_array, color_bytes
 
-        frame_index = self._next_frame_index()
-        return CameraFrame(
-            camera_id=self._camera_id,
-            frame_index=frame_index,
-            timestamp_ns=time.time_ns(),
-            color=color_array,
-            color_jpeg=color_bytes,
-            depth=None if depth_frame is None else np.asarray(depth_frame, dtype=np.uint16),
-            depth_scale_m=depth_scale_m,
-        )
+    def _decode_depth_snapshot_bytes(
+        self,
+        depth_bytes: bytes | None,
+        headers: Mapping[str, str],
+    ) -> tuple[np.ndarray, float | None] | None:
+        if depth_bytes is None:
+            return None
+
+        depth_frame = cv2.imdecode(np.frombuffer(depth_bytes, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if depth_frame is None:
+            LOGGER.debug("Network camera depth fetch returned undecodable frame camera=%s", self._camera_id)
+            return None
+
+        depth_scale_m = None
+        header_scale = headers.get("X-Depth-Scale") or headers.get("x-depth-scale")
+        if header_scale:
+            try:
+                depth_scale_m = _depth_scale_to_meters(float(header_scale))
+            except ValueError:
+                pass
+
+        return np.asarray(depth_frame, dtype=np.uint16), depth_scale_m
 
     def get_preview_jpeg(self, timeout_ms: int = 1000) -> tuple[bytes, int] | None:
         if not self._started:
@@ -432,46 +599,45 @@ class NetworkApiCamera(CameraDevice):
         timeout_s = max(0.05, float(timeout_ms if timeout_ms > 0 else self._timeout_ms) / 1000.0)
         try:
             color_bytes, _ = _http_bytes(f"{self._base_url}/snapshot/color.jpg", timeout_s=timeout_s)
-        except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, ValueError) as exc:
+        except (TimeoutError, urllib.error.URLError, socket.timeout, ValueError) as exc:
             LOGGER.debug("Network camera preview fetch failed camera=%s url=%s error=%s", self._camera_id, self._base_url, exc)
             return None
 
         return color_bytes, self._next_frame_index()
 
 
-def _candidate_addresses(config: NetworkCameraDiscoveryConfig) -> list[tuple[str, int]]:
+def _candidate_addresses(config: NetworkCameraDiscoveryConfig) -> list[tuple[str, int]]:  # noqa: C901
     addresses: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = set()
 
     # Always probe local loopback endpoints so host-local camera services are reachable via network API.
-    for loopback_host in ("127.0.0.1", "localhost"):
-        for port in config.ports:
-            candidate = (loopback_host, int(port))
-            if candidate not in seen:
-                seen.add(candidate)
-                addresses.append(candidate)
+    _add_candidates_from_hosts(["127.0.0.1", "localhost"], config.ports, addresses, seen)
 
-    for ip in config.ips:
-        for port in config.ports:
-            candidate = (ip, int(port))
-            if candidate not in seen:
-                seen.add(candidate)
-                addresses.append(candidate)
+    # Add manually specified IPs.
+    _add_candidates_from_hosts(list(config.ips), config.ports, addresses, seen)
 
+    # Add candidates from subnet.
     try:
         network = ipaddress.ip_network(config.subnet, strict=False)
+        for host in network.hosts():
+            _add_candidates_from_hosts([str(host)], config.ports, addresses, seen)
     except ValueError:
-        return addresses
+        pass
 
-    for host in network.hosts():
-        host_text = str(host)
-        for port in config.ports:
-            candidate = (host_text, int(port))
+    return addresses
+
+
+def _add_candidates_from_hosts(
+    hosts: list[str], ports: tuple[int, ...] | list[int],
+    addresses: list[tuple[str, int]], seen: set[tuple[str, int]],
+) -> None:
+    """Add host:port candidates to address list, avoiding duplicates."""
+    for host in hosts:
+        for port in ports:
+            candidate = (host, int(port))
             if candidate not in seen:
                 seen.add(candidate)
                 addresses.append(candidate)
-
-    return addresses
 
 
 def _discover_single_network_camera(
@@ -486,7 +652,7 @@ def _discover_single_network_camera(
 
     try:
         discovery = _http_json(f"{base_url}/discovery", timeout_s=timeout_s)
-    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, json.JSONDecodeError, UnicodeDecodeError):
+    except (TimeoutError, urllib.error.URLError, socket.timeout, json.JSONDecodeError):
         return None
 
     if str(discovery.get("service_name", "")).strip() != "FemtoBoltNuc":
@@ -496,7 +662,7 @@ def _discover_single_network_camera(
 
     try:
         metadata = _http_json(f"{base_url}/metadata", timeout_s=timeout_s)
-    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, socket.timeout, json.JSONDecodeError, UnicodeDecodeError):
+    except (TimeoutError, urllib.error.URLError, socket.timeout, json.JSONDecodeError):
         return None
 
     calibration = metadata.get("calibration")
@@ -517,6 +683,7 @@ def _discover_single_network_camera(
         if calibration.get("depth_to_color_extrinsic") is not None
         else calibration.get("depth_to_color")
     )
+    depth_alignment_enabled = bool(calibration.get("depth_alignment_enabled", False))
     device = metadata.get("device") if isinstance(metadata.get("device"), Mapping) else {}
     instance_id = str(discovery.get("instance_id", "")).strip()
     serial_number = str(discovery.get("serial_number", "")).strip()
@@ -535,6 +702,7 @@ def _discover_single_network_camera(
         use_depth=use_depth,
         timeout_ms=timeout_ms,
         depth_scale_m=depth_scale,
+        depth_alignment_enabled=depth_alignment_enabled,
     )
 
 
