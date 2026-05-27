@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
 import json
 import asyncio
 import logging
 import os
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 from shutil import which
 from typing import Annotated
@@ -37,6 +40,8 @@ from app.schemas import (
     StartRecordingResponse,
     StartCalibrationResponse,
     StopRecordingResponse,
+    EmailCaptureRequest,
+    EmailCaptureResponse,
 )
 from app.services.calibration_runner import CalibrationRunnerService
 from app.services.calibration_store import CalibrationStore
@@ -47,6 +52,83 @@ from app.services.volumetric_capture import VolumetricCaptureService
 
 LOGGER = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["controller"])
+
+POSTMARK_ENDPOINT = "https://api.postmarkapp.com/email"
+
+
+def _resolve_latest_capture_file(output_dir: Path) -> Path:
+    candidates = sorted(
+        output_dir.glob("*.ply"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        raise HTTPException(status_code=404, detail="No capture files found")
+    return candidates[0]
+
+
+def _resolve_capture_file(output_dir: Path, file_name: str | None) -> Path:
+    if not file_name:
+        return _resolve_latest_capture_file(output_dir)
+    if not file_name.lower().endswith(".ply") or "/" in file_name or "\\" in file_name:
+        raise HTTPException(status_code=400, detail="Invalid capture file name")
+    file_path = (output_dir / file_name).resolve()
+    if output_dir.resolve() not in file_path.parents and file_path != output_dir.resolve():
+        raise HTTPException(status_code=400, detail="Invalid capture file location")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Capture file not found")
+    return file_path
+
+
+def _read_attachment(path: Path, content_type: str, name: str | None = None) -> dict[str, str]:
+    data = path.read_bytes()
+    return {
+        "Name": name or path.name,
+        "Content": base64.b64encode(data).decode("ascii"),
+        "ContentType": content_type,
+    }
+
+
+def _send_postmark_email(
+    *,
+    token: str,
+    sender: str,
+    recipient: str,
+    subject: str,
+    text_body: str,
+    attachments: list[dict[str, str]],
+    message_stream: str | None,
+) -> None:
+    payload = {
+        "From": sender,
+        "To": recipient,
+        "Subject": subject,
+        "TextBody": text_body,
+        "Attachments": attachments,
+    }
+    if message_stream:
+        payload["MessageStream"] = message_stream
+
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        POSTMARK_ENDPOINT,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Postmark-Server-Token": token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            if response.status >= 400:
+                raise HTTPException(status_code=502, detail="Postmark email send failed")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=502, detail=f"Postmark email send failed: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise HTTPException(status_code=502, detail=f"Postmark email send failed: {exc}") from exc
 
 
 def _notify_blender_update(request: Request, event: str, payload: dict[str, object]) -> None:
@@ -395,3 +477,35 @@ def create_volumetric_capture(
     )
     _notify_blender_update(request, "volumetric-capture", response.model_dump())
     return response
+
+
+@router.post("/demo/email-capture")
+def email_capture(payload: EmailCaptureRequest, request: Request) -> EmailCaptureResponse:
+    token = getattr(request.app.state, "postmark_server_token", None)
+    sender = getattr(request.app.state, "postmark_from", None)
+    message_stream = getattr(request.app.state, "postmark_message_stream", None)
+    output_dir = getattr(request.app.state, "capture_output_dir", None)
+
+    if not token or not sender:
+        raise HTTPException(status_code=500, detail="Postmark is not configured")
+    if output_dir is None:
+        raise HTTPException(status_code=500, detail="Capture output directory is unavailable")
+
+    capture_path = _resolve_capture_file(Path(output_dir), payload.capture_file_name)
+    preview_path = capture_path.with_name(capture_path.stem + "_preview.png")
+
+    attachments = [_read_attachment(capture_path, "application/octet-stream")]
+    if preview_path.exists():
+        attachments.append(_read_attachment(preview_path, "image/png", name=f"{capture_path.stem}.png"))
+
+    _send_postmark_email(
+        token=token,
+        sender=sender,
+        recipient=payload.email,
+        subject="Innovation insight 3D capture",
+        text_body="Your 3D capture is ready. The point cloud and preview are attached.",
+        attachments=attachments,
+        message_stream=message_stream,
+    )
+
+    return EmailCaptureResponse(accepted=True, message="Email queued")

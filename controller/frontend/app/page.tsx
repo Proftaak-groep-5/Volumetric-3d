@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { CameraGrid } from "@/components/camera-grid";
+import { PlyViewer } from "@/components/ply-viewer";
 import {
     CalibrationRunStatusResponse,
     CameraInfo,
@@ -296,6 +298,11 @@ export default function HomePage() {
             <section className="hero">
                 <h1>Volumetric Femto Controller</h1>
                 <p>Live preview from all connected Femto Bolt cameras, plus click-to-triangulate 3D points from calibration.</p>
+                <div className="hero-actions">
+                    <Link className="button-link" href="/demo">
+                        Launch Demo Mode
+                    </Link>
+                </div>
             </section>
 
             <section className="toolbar">
@@ -414,11 +421,9 @@ export default function HomePage() {
                         files: <a href={`${apiBaseUrl}${captureResult.capture_file_url}`} target="_blank" rel="noreferrer">PLY</a> | {" "}
                         <a href={`${apiBaseUrl}${captureResult.preview_image_url}`} target="_blank" rel="noreferrer">Preview</a>
                     </p>
-                    {/* eslint-disable-next-line @next/next/no-img-element -- Backend-generated preview is served directly. */}
-                    <img
-                        src={`${apiBaseUrl}${captureResult.preview_image_url}`}
-                        alt="Top-down stitched point cloud preview"
-                        className="capture-preview"
+                    <PlyViewer
+                        className="capture-preview-3d"
+                        src={`${apiBaseUrl}${captureResult.capture_file_url}`}
                     />
                 </section>
             )}

@@ -57,6 +57,31 @@ body {
     color: var(--muted);
 }
 
+.hero-actions {
+    margin-top: 0.8rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.button-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.6rem 0.95rem;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #062021;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.button-link.secondary {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--text);
+}
+
 .toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -238,6 +263,224 @@ button.secondary {
     display: block;
 }
 
+.capture-preview-3d {
+    margin-top: 0.7rem;
+    width: min(720px, 100%);
+    height: min(420px, 70vh);
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: rgba(5, 10, 13, 0.8);
+    overflow: hidden;
+}
+
+.demo-shell {
+    width: min(1180px, 100% - 2rem);
+    margin: 1.5rem auto 3rem;
+    display: grid;
+    gap: 1.4rem;
+    font-family: "Space Grotesk", "Segoe UI", sans-serif;
+}
+
+.demo-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.2rem 1.4rem;
+    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(80, 227, 194, 0.18), rgba(8, 15, 19, 0.9));
+    border: 1px solid var(--line);
+}
+
+.demo-hero h1 {
+    margin: 0.4rem 0 0.2rem;
+    font-size: clamp(1.8rem, 2.4vw, 2.6rem);
+}
+
+.demo-hero p {
+    margin: 0;
+    color: var(--muted);
+}
+
+.demo-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #0a211f;
+    background: var(--accent-2);
+    font-weight: 700;
+}
+
+.demo-hero-actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.demo-action {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.2rem 1.4rem;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    background: rgba(6, 12, 15, 0.86);
+}
+
+.demo-action button {
+    padding: 0.9rem 1.6rem;
+    font-size: 1.1rem;
+    border-radius: 14px;
+}
+
+.demo-action h2 {
+    margin: 0 0 0.35rem;
+}
+
+.demo-action p {
+    margin: 0;
+    color: var(--muted);
+}
+
+.demo-panel {
+    padding: 1.3rem 1.4rem;
+    border-radius: 18px;
+    border: 1px solid var(--line);
+    background: rgba(10, 18, 22, 0.86);
+}
+
+.demo-processing {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.demo-spinner {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 4px solid rgba(80, 227, 194, 0.2);
+    border-top-color: var(--accent);
+    animation: spin 1s linear infinite;
+}
+
+.demo-status {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.demo-substatus {
+    margin: 0.4rem 0 0;
+    color: var(--muted);
+}
+
+.demo-preview {
+    margin-top: 0.9rem;
+    width: min(720px, 100%);
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: rgba(5, 10, 13, 0.8);
+}
+
+.demo-preview-3d {
+    margin-top: 0.9rem;
+    width: min(720px, 100%);
+    height: min(420px, 70vh);
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: rgba(5, 10, 13, 0.8);
+    overflow: hidden;
+}
+
+.demo-choice {
+    margin-top: 1.2rem;
+    display: grid;
+    gap: 0.8rem;
+}
+
+.demo-choice h3 {
+    margin: 0 0 0.2rem;
+}
+
+.demo-form {
+    display: grid;
+    gap: 0.8rem;
+}
+
+.demo-form input {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 0.7rem 0.85rem;
+    background: rgba(6, 12, 15, 0.86);
+    color: var(--text);
+    font-size: 0.95rem;
+}
+
+.demo-form-actions {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.demo-overlay,
+.flash-overlay {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    z-index: 50;
+}
+
+.demo-overlay {
+    background: rgba(3, 8, 11, 0.78);
+    backdrop-filter: blur(6px);
+}
+
+.demo-countdown {
+    display: grid;
+    gap: 0.6rem;
+    text-align: center;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+.demo-countdown span {
+    font-size: clamp(4rem, 12vw, 7rem);
+}
+
+.demo-countdown p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 1.1rem;
+}
+
+.flash-overlay {
+    background: white;
+    animation: flash 0.55s ease-out forwards;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes flash {
+    0% {
+        opacity: 0.95;
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
+
 @media (max-width: 640px) {
     .page-shell {
         width: min(1400px, 100% - 1rem);
@@ -246,5 +489,16 @@ button.secondary {
 
     .toolbar {
         gap: 0.45rem;
+    }
+
+    .demo-shell {
+        width: min(1180px, 100% - 1rem);
+        margin-top: 1rem;
+    }
+
+    .demo-hero,
+    .demo-action {
+        flex-direction: column;
+        align-items: flex-start;
     }
 }
