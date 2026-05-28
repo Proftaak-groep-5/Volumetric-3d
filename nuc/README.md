@@ -40,7 +40,7 @@ Currently still placeholder / intentionally temporary:
 
 ## 1. Windows build requirements
 
-Required:
+Required for full functionality:
 
 - Windows 10/11 x64
 - Visual Studio 2022 with Desktop C++ workload
@@ -332,7 +332,7 @@ Depth semantics:
 
 ## 9. JavaScript depth client example
 
-See [examples/depth_packet_client.js](/c:/Users/sam-d/Documents/Github/Volumetric-3d/nuc/examples/depth_packet_client.js).
+See [nuc/examples/depth_packet_client.js](nuc/examples/depth_packet_client.js).
 
 Minimal parser:
 
@@ -359,7 +359,7 @@ ws.onmessage = (event) => {
 
 ## 10. C++ depth client example
 
-See [examples/depth_packet_client.cpp](/c:/Users/sam-d/Documents/Github/Volumetric-3d/nuc/examples/depth_packet_client.cpp).
+See [nuc/examples/depth_packet_client.cpp](nuc/examples/depth_packet_client.cpp).
 
 That example assumes you already have one full websocket message in a `std::vector<uint8_t>`, then:
 
