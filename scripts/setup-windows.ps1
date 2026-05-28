@@ -21,6 +21,40 @@ function Require-Command {
     return $true
 }
 
+function Install-Package {
+    param([
+        string]$WingetId,
+        [string]$ChocoId,
+        [string]$ScoopId
+    )
+
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        if ($WingetId) {
+            Write-Host "[install] winget $WingetId" -ForegroundColor Yellow
+            & winget install --id $WingetId -e --silent --accept-package-agreements --accept-source-agreements
+            return
+        }
+    }
+
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        if ($ChocoId) {
+            Write-Host "[install] choco $ChocoId" -ForegroundColor Yellow
+            & choco install $ChocoId -y
+            return
+        }
+    }
+
+    if (Get-Command scoop -ErrorAction SilentlyContinue) {
+        if ($ScoopId) {
+            Write-Host "[install] scoop $ScoopId" -ForegroundColor Yellow
+            & scoop install $ScoopId
+            return
+        }
+    }
+
+    Write-Host "[warn] No supported package manager found (winget/choco/scoop)." -ForegroundColor Yellow
+}
+
 function Parse-NodeMajor {
     param([string]$VersionString)
     $v = $VersionString.Trim()
@@ -42,6 +76,32 @@ if (Require-Command "py" "Install Python 3.13 and ensure the py launcher is avai
         }
     } catch {
         # keep looking
+    }
+}
+
+if (-not $pythonCmd) {
+    if (Require-Command "python3.13" "Install Python 3.13 and ensure python3.13 is on PATH.") {
+        $pyVersion = & python3.13 -V
+        Write-Host "[ok] $pyVersion" -ForegroundColor Green
+        $pythonCmd = "python3.13"
+    }
+}
+
+if (-not $pythonCmd) {
+    Install-Package -WingetId "Python.Python.3.13" -ChocoId "python" -ScoopId "python"
+}
+
+if (-not $pythonCmd) {
+    if (Require-Command "py" "Install Python 3.13 and ensure the py launcher is available.") {
+        try {
+            $pyVersion = & py -3.13 -V 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[ok] $pyVersion" -ForegroundColor Green
+                $pythonCmd = "py -3.13"
+            }
+        } catch {
+            # keep looking
+        }
     }
 }
 
@@ -76,13 +136,23 @@ Write-Host "Installing Python deps (calibration + controller backend)"
 
 Write-Section "Node.js 20+"
 if (-not (Require-Command "node" "Install Node.js 20+ from https://nodejs.org/")) {
+    Install-Package -WingetId "OpenJS.NodeJS.LTS" -ChocoId "nodejs-lts" -ScoopId "nodejs-lts"
+}
+
+if (-not (Require-Command "node" "Install Node.js 20+ from https://nodejs.org/")) {
     throw "Node.js not found."
 }
 
 $nodeVersion = & node -v
 $nodeMajor = Parse-NodeMajor $nodeVersion
 if (-not $nodeMajor -or $nodeMajor -lt 20) {
-    throw "Node.js 20+ required. Found $nodeVersion"
+    Write-Host "[warn] Node.js 20+ required. Found $nodeVersion" -ForegroundColor Yellow
+    Install-Package -WingetId "OpenJS.NodeJS.LTS" -ChocoId "nodejs-lts" -ScoopId "nodejs-lts"
+    $nodeVersion = & node -v
+    $nodeMajor = Parse-NodeMajor $nodeVersion
+    if (-not $nodeMajor -or $nodeMajor -lt 20) {
+        throw "Node.js 20+ required. Found $nodeVersion"
+    }
 }
 Write-Host "[ok] Node.js $nodeVersion" -ForegroundColor Green
 
@@ -95,6 +165,9 @@ try {
 }
 
 Write-Section "CMake"
+if (-not (Require-Command "cmake" "Install CMake 3.24+ and ensure it is on PATH.")) {
+    Install-Package -WingetId "Kitware.CMake" -ChocoId "cmake" -ScoopId "cmake"
+}
 if (-not (Require-Command "cmake" "Install CMake 3.24+ and ensure it is on PATH.")) {
     throw "CMake not found."
 }
@@ -129,6 +202,7 @@ if (Test-Path $gstDll) {
     Write-Host "[info] GSTREAMER_ROOT_DIR=$($env:GSTREAMER_ROOT_DIR)"
 } else {
     Write-Host "[missing] GStreamer not found at $gstreamerRoot" -ForegroundColor Yellow
+    Install-Package -WingetId "GStreamer.GStreamer" -ChocoId "gstreamer" -ScoopId "gstreamer"
     Write-Host "  Install GStreamer 1.0 MSVC x64 runtime + dev files and set GSTREAMER_ROOT_DIR."
 }
 
