@@ -26,6 +26,9 @@ services:
       - /lib/modules:/host/lib/modules:ro
       - /boot:/host/boot:ro
       - /usr:/host/usr:ro
+      - ./falco-rules:/etc/falco/rules.d:ro
+    environment:
+      - FALCO_RULES_FILES=/etc/falco/rules.d/custom-rules.yaml
     restart: unless-stopped
 
   falcosidekick:
@@ -36,6 +39,18 @@ services:
       environment:
         - DISCORD_WEBHOOKURL=https://discord.com/api/webhooks/1506270977850343444/fgM_FNrCiQzZBNXpexVIYa-M-fRUwtIlHbMrd18ZsUZJRUQzCeo2hIuTVy9aHfoP_MUO
       restart: unless-stopped
+
+  backend:
+    image: backend-server:latest
+    container_name: backend
+    restart: unless-stopped
+    env_file:
+      - platform/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_started
 
   pgadmin:
     image: dpage/pgadmin4
