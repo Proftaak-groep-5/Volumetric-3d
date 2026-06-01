@@ -13,7 +13,7 @@ metadata:
     environment: dev
     io.kompose.service: backend-platform--env
   name: platform--env
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 ---
 apiVersion: v1
 kind: Service
@@ -25,7 +25,7 @@ metadata:
     environment: dev
     io.kompose.service: backend
   name: backend
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   ports:
   - name: "8000"
@@ -45,7 +45,7 @@ metadata:
     environment: dev
     io.kompose.service: falcosidekick
   name: falcosidekick
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   ports:
   - name: "2801"
@@ -65,7 +65,7 @@ metadata:
     environment: dev
     io.kompose.service: frontend
   name: frontend
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   ports:
   - name: "3000"
@@ -85,7 +85,7 @@ metadata:
     environment: dev
     io.kompose.service: pgadmin
   name: pgadmin
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   ports:
   - name: "8080"
@@ -105,7 +105,7 @@ metadata:
     environment: dev
     io.kompose.service: postgres
   name: postgres
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   ports:
   - name: "5432"
@@ -123,7 +123,7 @@ metadata:
     environment: dev
     io.kompose.service: falco-claim1
   name: falco-claim1
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   accessModes:
   - ReadOnlyMany
@@ -138,7 +138,7 @@ metadata:
     environment: dev
     io.kompose.service: falco-claim2
   name: falco-claim2
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   accessModes:
   - ReadOnlyMany
@@ -153,7 +153,7 @@ metadata:
     environment: dev
     io.kompose.service: falco-claim3
   name: falco-claim3
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   accessModes:
   - ReadOnlyMany
@@ -168,7 +168,7 @@ metadata:
     environment: dev
     io.kompose.service: falco-claim5
   name: falco-claim5
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   accessModes:
   - ReadOnlyMany
@@ -183,7 +183,7 @@ metadata:
     environment: dev
     io.kompose.service: falco-claim6
   name: falco-claim6
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   accessModes:
   - ReadOnlyMany
@@ -198,7 +198,7 @@ metadata:
     environment: dev
     io.kompose.service: falco-claim7
   name: falco-claim7
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   accessModes:
   - ReadOnlyMany
@@ -213,7 +213,7 @@ metadata:
     environment: dev
     io.kompose.service: falco-claim8
   name: falco-claim8
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   accessModes:
   - ReadOnlyMany
@@ -231,7 +231,7 @@ metadata:
     environment: dev
     io.kompose.service: backend
   name: backend
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   replicas: 1
   selector:
@@ -268,7 +268,7 @@ metadata:
     environment: dev
     io.kompose.service: falco
   name: falco
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   replicas: 1
   selector:
@@ -357,7 +357,7 @@ metadata:
     environment: dev
     io.kompose.service: falcosidekick
   name: falcosidekick
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   replicas: 1
   selector:
@@ -394,7 +394,7 @@ metadata:
     environment: dev
     io.kompose.service: frontend
   name: frontend
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   replicas: 1
   selector:
@@ -431,7 +431,7 @@ metadata:
     environment: dev
     io.kompose.service: pgadmin
   name: pgadmin
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   replicas: 1
   selector:
@@ -470,7 +470,7 @@ metadata:
     environment: dev
     io.kompose.service: postgres
   name: postgres
-  namespace: volumetric-3d
+  namespace: kind-gitops-cluster
 spec:
   replicas: 1
   selector:

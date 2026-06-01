@@ -10,4 +10,4 @@ labels:
     pairs:
       environment: dev
 
-namespace: volumetric-3d  # Verander dit naar jouw namespace
+namespace: kind-gitops-cluster  # Verander dit naar jouw namespace
