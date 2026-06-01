@@ -52,6 +52,19 @@ services:
       postgres:
         condition: service_started
 
+  frontend:
+    build:
+      context: platform/frontend
+    container_name: frontend
+    restart: unless-stopped
+    env_file:
+      - platform/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_started
+
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin

@@ -16,6 +16,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # the application crashes without emitting any logs due to buffering.
 ENV PYTHONUNBUFFERED=1
 
+ENV BACKEND_PORT=8000
+
 WORKDIR /app
 
 # Create a non-privileged user that the app will run under.
@@ -48,4 +50,4 @@ COPY . .
 EXPOSE 8000
 
 # Run the application.
-CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

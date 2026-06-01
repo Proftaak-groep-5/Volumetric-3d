@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    io.kompose.service: falco
+    app: falco-service
+  name: falco
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: falco
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f compose.yml --out k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        io.kompose.service: falco
+    spec:
+      containers:
+        - env:
+            - name: FALCO_RULES_FILES
+              value: /etc/falco/rules.d/custom-rules.yaml
+          image: falcosecurity/falco:latest
+          name: falco
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /host/proc
+              name: falco-claim1
+              readOnly: true
+            - mountPath: /host/etc
+              name: falco-claim2
+              readOnly: true
+            - mountPath: /sys/kernel/tracing
+              name: falco-claim3
+              readOnly: true
+            - mountPath: /host/lib/modules
+              name: falco-claim5
+              readOnly: true
+            - mountPath: /host/boot
+              name: falco-claim6
+              readOnly: true
+            - mountPath: /host/usr
+              name: falco-claim7
+              readOnly: true
+            - mountPath: /etc/falco/rules.d
+              name: falco-claim8
+              readOnly: true
+      restartPolicy: Always
+      volumes:
+        - name: falco-claim1
+          persistentVolumeClaim:
+            claimName: falco-claim1
+            readOnly: true
+        - name: falco-claim2
+          persistentVolumeClaim:
+            claimName: falco-claim2
+            readOnly: true
+        - name: falco-claim3
+          persistentVolumeClaim:
+            claimName: falco-claim3
+            readOnly: true
+        - name: falco-claim5
+          persistentVolumeClaim:
+            claimName: falco-claim5
+            readOnly: true
+        - name: falco-claim6
+          persistentVolumeClaim:
+            claimName: falco-claim6
+            readOnly: true
+        - name: falco-claim7
+          persistentVolumeClaim:
+            claimName: falco-claim7
+            readOnly: true
+        - name: falco-claim8
+          persistentVolumeClaim:
+            claimName: falco-claim8
+            readOnly: true
