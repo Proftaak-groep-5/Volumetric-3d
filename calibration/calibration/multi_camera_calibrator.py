@@ -72,6 +72,8 @@ class CameraCalibrationResult:
     t_world_camera: Optional[ArrayF64]
     t_camera_world: Optional[ArrayF64]
     t_camera_cube: Optional[ArrayF64]
+    t_depth_color: Optional[ArrayF64]
+    depth_color_valid: Optional[bool]
     markers_used: List[int]
     quality: CameraQualityMetrics
     per_frame_estimates: List[FrameCalibrationRecord]
@@ -116,6 +118,7 @@ class MultiCameraCalibrator:
         camera_results: List[CameraCalibrationResult] = []
         active_cameras: List[CameraDevice] = []
         intrinsics_by_camera: Dict[str, Any] = {}
+        depth_to_color_by_camera: Dict[str, Optional[ArrayF64]] = {}
         state_by_camera: Dict[str, _CameraAccumulationState] = {}
 
         for camera in self._cameras:
@@ -125,6 +128,7 @@ class MultiCameraCalibrator:
                 intrinsics.validate()
                 active_cameras.append(camera)
                 intrinsics_by_camera[camera.camera_id] = intrinsics
+                depth_to_color_by_camera[camera.camera_id] = camera.get_depth_to_color_transform()
                 state_by_camera[camera.camera_id] = _CameraAccumulationState()
                 LOGGER.info("Camera %s ready for calibration", camera.camera_id)
             except Exception as exc:
@@ -168,6 +172,7 @@ class MultiCameraCalibrator:
                 camera_id=camera_id,
                 timestamp=timestamp,
                 state=state_by_camera[camera_id],
+                depth_to_color_transform=depth_to_color_by_camera.get(camera_id),
             )
             camera_results.append(result)
 
@@ -523,8 +528,19 @@ class MultiCameraCalibrator:
 
         return sampled
 
-    def _finalize_camera_result(self, camera_id: str, timestamp: str, state: _CameraAccumulationState) -> CameraCalibrationResult:
+    def _finalize_camera_result(
+        self,
+        camera_id: str,
+        timestamp: str,
+        state: _CameraAccumulationState,
+        depth_to_color_transform: Optional[ArrayF64],
+    ) -> CameraCalibrationResult:
         valid_records = [record for record in state.frames if record.success and record.t_camera_cube is not None]
+
+        depth_color_valid = self._validate_depth_to_color_transform(
+            camera_id=camera_id,
+            t_depth_color=depth_to_color_transform,
+        )
 
         if len(valid_records) < self._config.quality.min_valid_frames_per_camera:
             message = (
@@ -537,6 +553,8 @@ class MultiCameraCalibrator:
                 state=state,
                 message=message,
                 inlier_count=0,
+                depth_to_color_transform=depth_to_color_transform,
+                depth_color_valid=depth_color_valid,
             )
 
         transforms = [record.t_camera_cube for record in valid_records if record.t_camera_cube is not None]
@@ -561,6 +579,8 @@ class MultiCameraCalibrator:
                 state=state,
                 message=message,
                 inlier_count=len(inlier_indices),
+                depth_to_color_transform=depth_to_color_transform,
+                depth_color_valid=depth_color_valid,
             )
 
         inlier_transforms = [transforms[idx] for idx in inlier_indices]
@@ -609,6 +629,8 @@ class MultiCameraCalibrator:
             t_world_camera=t_world_camera,
             t_camera_world=t_camera_cube,
             t_camera_cube=t_camera_cube,
+            t_depth_color=depth_to_color_transform,
+            depth_color_valid=depth_color_valid,
             markers_used=sorted(state.marker_ids_seen),
             quality=quality,
             per_frame_estimates=state.frames,
@@ -621,6 +643,8 @@ class MultiCameraCalibrator:
         state: _CameraAccumulationState,
         message: str,
         inlier_count: int,
+        depth_to_color_transform: Optional[ArrayF64],
+        depth_color_valid: Optional[bool],
     ) -> CameraCalibrationResult:
         LOGGER.warning(message)
         quality = self._build_quality_metrics(state, inlier_count=inlier_count, translation_std=None, rotation_std=None)
@@ -632,6 +656,8 @@ class MultiCameraCalibrator:
             t_world_camera=None,
             t_camera_world=None,
             t_camera_cube=None,
+            t_depth_color=depth_to_color_transform,
+            depth_color_valid=depth_color_valid,
             markers_used=sorted(state.marker_ids_seen),
             quality=quality,
             per_frame_estimates=state.frames,
@@ -745,8 +771,23 @@ class MultiCameraCalibrator:
             t_world_camera=None,
             t_camera_world=None,
             t_camera_cube=None,
+            t_depth_color=None,
+            depth_color_valid=None,
             markers_used=[],
             quality=quality,
             per_frame_estimates=[],
         )
+
+    @staticmethod
+    def _validate_depth_to_color_transform(
+        camera_id: str,
+        t_depth_color: Optional[ArrayF64],
+    ) -> Optional[bool]:
+        if t_depth_color is None:
+            return None
+
+        if not np.all(np.isfinite(t_depth_color)):
+            LOGGER.warning("Camera %s depth->color transform contains non-finite values", camera_id)
+            return False
+        return True
 

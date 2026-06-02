@@ -58,6 +58,21 @@ class CreateVolumetricCaptureResponse(BaseModel):
     debug: dict[str, Any] | None = None
 
 
+class DepthRgbBaselineEntry(BaseModel):
+    ok: bool
+    reason: str | None = None
+    delta_translation_m: float | None = None
+    delta_x_m: float | None = None
+    calib_x_m: float | None = None
+    sdk_x_m: float | None = None
+    tolerance_m: float | None = None
+
+
+class DepthRgbBaselineResponse(BaseModel):
+    tolerance_m: float
+    results: dict[str, DepthRgbBaselineEntry]
+
+
 class ConfigureNetworkCamerasRequest(BaseModel):
     camera_ids: list[str] | None = None
 

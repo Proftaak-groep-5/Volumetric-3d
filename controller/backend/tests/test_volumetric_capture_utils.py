@@ -130,6 +130,46 @@ class VolumetricCaptureUtilsTests(unittest.TestCase):
                 f"output={np.array2string(world_points, precision=1)}",
             )
 
+    def test_depth_rgb_baseline_compare_within_tolerance(self) -> None:
+        # Confirms baseline comparison accepts deltas <= 0.5 mm.
+        calib = np.eye(4, dtype=np.float64)
+        sdk = np.eye(4, dtype=np.float64)
+        calib[0, 3] = -0.032
+        sdk[0, 3] = -0.0324
+        try:
+            result = VolumetricCaptureService._compare_depth_rgb_transforms(calib, sdk, 0.0005)
+            self.assertTrue(result.get("ok", False))
+        except Exception as exc:
+            self._report("depth_rgb_baseline_ok", False, f"unexpected error: {exc}")
+            raise
+        else:
+            self._report(
+                "depth_rgb_baseline_ok",
+                True,
+                "check=delta <= 0.5mm",
+                f"delta={result.get('delta_translation_m')}",
+            )
+
+    def test_depth_rgb_baseline_compare_outside_tolerance(self) -> None:
+        # Confirms baseline comparison flags deltas > 0.5 mm.
+        calib = np.eye(4, dtype=np.float64)
+        sdk = np.eye(4, dtype=np.float64)
+        calib[0, 3] = -0.032
+        sdk[0, 3] = -0.033
+        try:
+            result = VolumetricCaptureService._compare_depth_rgb_transforms(calib, sdk, 0.0005)
+            self.assertFalse(result.get("ok", True))
+        except Exception as exc:
+            self._report("depth_rgb_baseline_fail", False, f"unexpected error: {exc}")
+            raise
+        else:
+            self._report(
+                "depth_rgb_baseline_fail",
+                True,
+                "check=delta > 0.5mm",
+                f"delta={result.get('delta_translation_m')}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

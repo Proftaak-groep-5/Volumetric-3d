@@ -120,6 +120,43 @@ class CalibrationStoreTests(unittest.TestCase):
                     "kept_valid=0",
                 )
 
+    def test_load_reads_t_rgb_depth_when_present(self) -> None:
+        # Confirms that the depth-to-color transform is available for capture alignment.
+        t_rgb_depth = np.eye(4)
+        t_rgb_depth[0, 3] = -0.032
+        payload = {
+            "cameras": [
+                {
+                    "camera_id": "cam-rgbd",
+                    "success": True,
+                    "T_camera_world": np.eye(4).tolist(),
+                    "T_RGB_depth": t_rgb_depth.tolist(),
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "calib.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            store = CalibrationStore(path)
+            try:
+                store.load()
+                extrinsics = store.get("cam-rgbd")
+                self.assertIsNotNone(extrinsics)
+                self.assertIsNotNone(extrinsics.t_rgb_depth)
+                self.assertTrue(np.allclose(extrinsics.t_rgb_depth, t_rgb_depth))
+            except Exception as exc:
+                self._report("load_reads_t_rgb_depth", False, f"unexpected error: {exc}")
+                raise
+            else:
+                self._report(
+                    "load_reads_t_rgb_depth",
+                    True,
+                    "check=load T_RGB_depth when present",
+                    "camera_id=cam-rgbd",
+                    "t_rgb_depth=loaded",
+                )
+
+
 
 if __name__ == "__main__":
     unittest.main()

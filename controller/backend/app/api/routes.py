@@ -34,6 +34,7 @@ from app.schemas import (
     CreateVolumetricCaptureResponse,
     CreateVolumetricPointRequest,
     CreateVolumetricPointResponse,
+    DepthRgbBaselineResponse,
     PickRecordingOutputDirectoryResponse,
     RecordingStatusResponse,
     StartRecordingRequest,
@@ -224,6 +225,18 @@ def calibration_status(
 ) -> CalibrationRunStatusResponse:
     snapshot = calibration_runner.status()
     return CalibrationRunStatusResponse(**snapshot.__dict__)
+
+
+@router.get("/calibration/depth-baseline")
+def calibration_depth_baseline(
+    capture_service: Annotated[VolumetricCaptureService, Depends(get_volumetric_capture_service)],
+    camera_ids: list[str] | None = Query(default=None),
+) -> DepthRgbBaselineResponse:
+    results = capture_service.check_depth_rgb_baseline(camera_ids)
+    return DepthRgbBaselineResponse(
+        tolerance_m=float(capture_service._depth_rgb_baseline_tol_m),
+        results=results,
+    )
 
 
 @router.post("/calibration/run", responses={409: {"description": "Calibration is already running"}})
@@ -473,6 +486,7 @@ def create_volumetric_capture(
         debug={
             "calibration_file": str(calibration_store.calibration_file),
             "skipped_cameras": result.skipped_cameras,
+            "depth_rgb_baseline": result.depth_rgb_baseline,
         },
     )
     _notify_blender_update(request, "volumetric-capture", response.model_dump())
