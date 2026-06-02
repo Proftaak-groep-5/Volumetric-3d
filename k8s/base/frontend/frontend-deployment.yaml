@@ -24,7 +24,7 @@ spec:
         - envFrom:
             - configMapRef:
                 name: platform--env
-          image: frontend
+          image: volumetric-3d-frontend
           name: frontend
           ports:
             - containerPort: 3000
