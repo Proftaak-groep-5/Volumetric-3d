@@ -251,7 +251,7 @@ spec:
       - envFrom:
         - configMapRef:
             name: platform--env
-        image: volumetric-3d-backend
+        image: squidgy21/volumetric-3d-backend:1.0
         name: backend
         ports:
         - containerPort: 8000
@@ -414,7 +414,7 @@ spec:
       - envFrom:
         - configMapRef:
             name: platform--env
-        image: volumetric-3d-frontend
+        image: squidgy21/volumetric-3d-frontend:1.0
         name: frontend
         ports:
         - containerPort: 3000
