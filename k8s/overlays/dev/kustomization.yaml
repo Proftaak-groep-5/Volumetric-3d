@@ -10,4 +10,4 @@ labels:
     pairs:
       environment: dev
 
-namespace: kind-gitops-cluster  # Verander dit naar jouw namespace
+namespace: default  # Verander dit naar jouw namespace
