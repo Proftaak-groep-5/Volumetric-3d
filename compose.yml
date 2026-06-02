@@ -41,7 +41,8 @@ services:
       restart: unless-stopped
 
   backend:
-    image: backend-server:latest
+    build:
+        context: platform/backend
     container_name: backend
     restart: unless-stopped
     env_file:
