@@ -1,7 +1,7 @@
 {
     "output": "calib_out",
     "dict": "DICT_4X4_50",
-    "cube": {
+    "cube": {        
         "marker_length": 0.15,
         "cube_length": 0.20
     },
@@ -37,5 +37,9 @@
         "max_workers": 32
     },
     "warmup_frames": 0,
-    "world_origin": "cube_center"
+    "world_origin": "cube_center",
+    "quality": {
+        "use_pnp_corners": true,
+        "pnp_fallback_to_markers": true
+    }
 }

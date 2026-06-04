@@ -54,6 +54,7 @@ class CaptureResult:
     points_per_camera: dict[str, int]
     cameras_used: list[str]
     skipped_cameras: dict[str, str]
+    depth_rgb_baseline: dict[str, dict[str, float | bool | str]]
 
 
 class VolumetricCaptureService:
@@ -76,6 +77,7 @@ class VolumetricCaptureService:
         self._pixel_step = max(1, int(pixel_step))
         mode = os.getenv("VOLUMETRIC_DEPTH_TO_COLOR_MODE", "forward").strip().lower()
         self._depth_to_color_mode = mode if mode in {"forward", "inverse", "identity", "auto"} else "forward"
+        self._depth_rgb_baseline_tol_m = float(os.getenv("VOLUMETRIC_DEPTH_RGB_BASELINE_TOL_M", "0.0005"))
         self._icp_enabled = os.getenv("VOLUMETRIC_ICP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         self._icp_coarse_max_points = max(500, int(os.getenv("VOLUMETRIC_ICP_COARSE_MAX_POINTS", "3200")))
         self._icp_fine_max_points = max(500, int(os.getenv("VOLUMETRIC_ICP_FINE_MAX_POINTS", "2200")))
@@ -194,6 +196,7 @@ class VolumetricCaptureService:
         target_output_dir = config.output_dir if config.output_dir is not None else self._output_dir
         selected_camera_ids = sorted(set(config.camera_ids or self._camera_manager.camera_ids()))
         synchronized_frames = self._get_synchronized_frames(selected_camera_ids, config)
+        depth_rgb_baseline = self.check_depth_rgb_baseline(selected_camera_ids)
         
         pixel_step_value = max(1, int(config.pixel_step if config.pixel_step is not None else self._pixel_step))
         depth_min_value = float(self._depth_min_m if config.depth_min_m is None else config.depth_min_m)
@@ -244,7 +247,7 @@ class VolumetricCaptureService:
         stacked_points, stacked_colors = self._stack_and_process_points(all_points_world, all_colors, config)
         return self._write_capture_output(
             target_output_dir, stacked_points, stacked_colors,
-            points_per_camera, cameras_used, skipped_cameras, config
+            points_per_camera, cameras_used, skipped_cameras, depth_rgb_baseline, config
         )
 
     def _get_synchronized_frames(
@@ -763,7 +766,9 @@ class VolumetricCaptureService:
     def _write_capture_output(
         self, output_dir: Path, stacked_points: np.ndarray,
         stacked_colors: np.ndarray | None, points_per_camera: dict[str, int],
-        cameras_used: list[str], skipped_cameras: dict[str, str], config: CaptureConfig,
+        cameras_used: list[str], skipped_cameras: dict[str, str],
+        depth_rgb_baseline: dict[str, dict[str, float | bool | str]],
+        config: CaptureConfig,
     ) -> CaptureResult:
         """Write capture output files and return result."""
         file_stem = config.file_stem
@@ -799,7 +804,73 @@ class VolumetricCaptureService:
             points_per_camera=points_per_camera,
             cameras_used=sorted(cameras_used),
             skipped_cameras=skipped_cameras,
+            depth_rgb_baseline=depth_rgb_baseline,
         )
+
+    def check_depth_rgb_baseline(
+        self,
+        camera_ids: list[str] | None = None,
+    ) -> dict[str, dict[str, float | bool | str]]:
+        selected = camera_ids or self._calibration_store.all_camera_ids()
+        results: dict[str, dict[str, float | bool | str]] = {}
+
+        for camera_id in selected:
+            extrinsics = self._calibration_store.get(camera_id)
+            if extrinsics is None or extrinsics.t_rgb_depth is None:
+                results[camera_id] = {
+                    "ok": False,
+                    "reason": "missing_calibration_depth_rgb",
+                }
+                continue
+
+            sdk_transform = self._camera_manager.depth_to_color_transform(camera_id)
+            if sdk_transform is None:
+                results[camera_id] = {
+                    "ok": False,
+                    "reason": "missing_sdk_depth_rgb",
+                }
+                continue
+
+            results[camera_id] = self._compare_depth_rgb_transforms(
+                extrinsics.t_rgb_depth,
+                sdk_transform,
+                self._depth_rgb_baseline_tol_m,
+            )
+        return results
+
+    @staticmethod
+    def _compare_depth_rgb_transforms(
+        calib_transform: np.ndarray,
+        sdk_transform: np.ndarray,
+        tolerance_m: float,
+    ) -> dict[str, float | bool | str]:
+        calib = np.asarray(calib_transform, dtype=np.float64)
+        sdk = np.asarray(sdk_transform, dtype=np.float64)
+        if calib.shape != (4, 4) or sdk.shape != (4, 4):
+            return {
+                "ok": False,
+                "reason": "invalid_transform_shape",
+            }
+
+        if not np.all(np.isfinite(calib)) or not np.all(np.isfinite(sdk)):
+            return {
+                "ok": False,
+                "reason": "non_finite_transform",
+            }
+
+        calib_t = np.asarray(calib[:3, 3], dtype=np.float64)
+        sdk_t = np.asarray(sdk[:3, 3], dtype=np.float64)
+        delta_t = calib_t - sdk_t
+        delta_norm = float(np.linalg.norm(delta_t))
+        ok = delta_norm <= float(tolerance_m)
+        return {
+            "ok": bool(ok),
+            "delta_translation_m": float(delta_norm),
+            "delta_x_m": float(delta_t[0]),
+            "calib_x_m": float(calib_t[0]),
+            "sdk_x_m": float(sdk_t[0]),
+            "tolerance_m": float(tolerance_m),
+        }
 
     def _capture_world_points_for_camera(
         self,
@@ -838,7 +909,9 @@ class VolumetricCaptureService:
             return None, None, f"{camera_id}: intrinsics unavailable", "no_intrinsics"
 
         color_intrinsics = self._camera_manager.intrinsics(camera_id) if sample_projected_color else None
-        depth_to_color = self._camera_manager.depth_to_color_transform(camera_id)
+        depth_to_color = extrinsics.t_rgb_depth
+        if depth_to_color is None:
+            depth_to_color = self._camera_manager.depth_to_color_transform(camera_id)
 
         depth_points = self._depth_to_camera_points(
             frame,

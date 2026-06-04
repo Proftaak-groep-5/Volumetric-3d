@@ -11,6 +11,7 @@ import numpy as np
 class CameraExtrinsics:
     camera_id: str
     t_camera_world: np.ndarray
+    t_rgb_depth: np.ndarray | None = None
 
 
 class CalibrationStore:
@@ -46,7 +47,20 @@ class CalibrationStore:
             if t_camera_world.shape != (4, 4):
                 continue
 
-            extrinsics[camera_id] = CameraExtrinsics(camera_id=camera_id, t_camera_world=t_camera_world)
+            t_rgb_depth = None
+            depth_matrix = item.get("T_RGB_depth")
+            if depth_matrix is None:
+                depth_matrix = item.get("T_RGB_color")
+            if depth_matrix is not None:
+                candidate = np.asarray(depth_matrix, dtype=np.float64)
+                if candidate.shape == (4, 4) and np.all(np.isfinite(candidate)):
+                    t_rgb_depth = candidate
+
+            extrinsics[camera_id] = CameraExtrinsics(
+                camera_id=camera_id,
+                t_camera_world=t_camera_world,
+                t_rgb_depth=t_rgb_depth,
+            )
 
         self._extrinsics = extrinsics
 
