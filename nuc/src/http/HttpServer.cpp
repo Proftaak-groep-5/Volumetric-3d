@@ -6,6 +6,7 @@
 #include <crow.h>
 
 #include <condition_variable>
+#include <exception>
 #include <thread>
 #include <unordered_set>
 
@@ -188,32 +189,56 @@ void HttpServer::start(Callbacks callbacks) {
 
     impl_->stopRequested = false;
     impl_->colorDispatchThread = std::thread([this] {
-        while(true) {
-            std::shared_ptr<const std::vector<uint8_t>> jpeg;
-            {
-                std::unique_lock lock(impl_->colorDispatchMutex);
-                impl_->colorDispatchCv.wait(lock, [this] {
-                    return impl_->stopRequested || impl_->pendingColorVersion != impl_->sentColorVersion;
-                });
-                if(impl_->stopRequested) {
-                    break;
+        try {
+            while(true) {
+                std::shared_ptr<const std::vector<uint8_t>> jpeg;
+                {
+                    std::unique_lock lock(impl_->colorDispatchMutex);
+                    impl_->colorDispatchCv.wait(lock, [this] {
+                        return impl_->stopRequested || impl_->pendingColorVersion != impl_->sentColorVersion;
+                    });
+                    if(impl_->stopRequested) {
+                        break;
+                    }
+                    jpeg = impl_->pendingColorFrame;
+                    impl_->sentColorVersion = impl_->pendingColorVersion;
                 }
-                jpeg = impl_->pendingColorFrame;
-                impl_->sentColorVersion = impl_->pendingColorVersion;
+                if(!jpeg || jpeg->empty()) {
+                    continue;
+                }
+                std::scoped_lock lock(impl_->wsMutex);
+                for(auto *client: impl_->colorClients) {
+                    try {
+                        client->send_binary(std::string(reinterpret_cast<const char *>(jpeg->data()), jpeg->size()));
+                    }
+                    catch(const std::exception &ex) {
+                        log::get()->warn("event=ws_send_failed stream=color_preview error=\"{}\"", ex.what());
+                    }
+                    catch(...) {
+                        log::get()->warn("event=ws_send_failed stream=color_preview error=unknown");
+                    }
+                }
             }
-            if(!jpeg || jpeg->empty()) {
-                continue;
-            }
-            std::scoped_lock lock(impl_->wsMutex);
-            for(auto *client: impl_->colorClients) {
-                client->send_binary(std::string(reinterpret_cast<const char *>(jpeg->data()), jpeg->size()));
-            }
+        }
+        catch(const std::exception &ex) {
+            log::get()->error("event=http_color_dispatch state=crashed error=\"{}\"", ex.what());
+        }
+        catch(...) {
+            log::get()->error("event=http_color_dispatch state=crashed error=unknown");
         }
     });
 
     impl_->serverThread = std::thread([this] {
-        log::get()->info("event=http_server state=running bind={} port={}", config_.bindAddress, config_.httpPort);
-        impl_->app.port(config_.httpPort).bindaddr(config_.bindAddress).multithreaded().run();
+        try {
+            log::get()->info("event=http_server state=running bind={} port={}", config_.bindAddress, config_.httpPort);
+            impl_->app.port(config_.httpPort).bindaddr(config_.bindAddress).multithreaded().run();
+        }
+        catch(const std::exception &ex) {
+            log::get()->error("event=http_server state=crashed error=\"{}\"", ex.what());
+        }
+        catch(...) {
+            log::get()->error("event=http_server state=crashed error=unknown");
+        }
     });
 }
 
@@ -251,7 +276,15 @@ void HttpServer::publishDepthPreview(std::shared_ptr<const std::vector<uint8_t>>
     }
     std::scoped_lock lock(impl_->wsMutex);
     for(auto *client: impl_->depthClients) {
-        client->send_binary(std::string(reinterpret_cast<const char *>(jpeg->data()), jpeg->size()));
+        try {
+            client->send_binary(std::string(reinterpret_cast<const char *>(jpeg->data()), jpeg->size()));
+        }
+        catch(const std::exception &ex) {
+            log::get()->warn("event=ws_send_failed stream=depth_preview error=\"{}\"", ex.what());
+        }
+        catch(...) {
+            log::get()->warn("event=ws_send_failed stream=depth_preview error=unknown");
+        }
     }
 }
 
@@ -261,7 +294,15 @@ void HttpServer::publishDepthBinary(std::shared_ptr<const std::vector<uint8_t>> 
     }
     std::scoped_lock lock(impl_->wsMutex);
     for(auto *client: impl_->depthBinaryClients) {
-        client->send_binary(std::string(reinterpret_cast<const char *>(packet->data()), packet->size()));
+        try {
+            client->send_binary(std::string(reinterpret_cast<const char *>(packet->data()), packet->size()));
+        }
+        catch(const std::exception &ex) {
+            log::get()->warn("event=ws_send_failed stream=depth_binary error=\"{}\"", ex.what());
+        }
+        catch(...) {
+            log::get()->warn("event=ws_send_failed stream=depth_binary error=unknown");
+        }
     }
 }
 

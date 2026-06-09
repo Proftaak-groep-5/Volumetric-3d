@@ -179,7 +179,37 @@ namespace femto
         }
         log::get()->info("event=camera state=starting");
         worker_ = std::thread([this]
-                              { workerLoop(); });
+                              {
+                                  while (running_)
+                                  {
+                                      try
+                                      {
+                                          workerLoop();
+                                      }
+                                      catch (const std::exception &ex)
+                                      {
+                                          {
+                                              std::scoped_lock lock(mutex_);
+                                              lastError_ = ex.what();
+                                              disconnectLocked();
+                                          }
+                                          log::get()->error("event=camera_worker state=crashed error=\"{}\" action=retry", ex.what());
+                                      }
+                                      catch (...)
+                                      {
+                                          {
+                                              std::scoped_lock lock(mutex_);
+                                              lastError_ = "unknown camera worker error";
+                                              disconnectLocked();
+                                          }
+                                          log::get()->error("event=camera_worker state=crashed error=unknown action=retry");
+                                      }
+                                      if (running_)
+                                      {
+                                          std::this_thread::sleep_for(std::chrono::milliseconds(config_.camera.retryIntervalMs));
+                                      }
+                                  }
+                              });
     }
 
     void OrbbecCamera::stop()
