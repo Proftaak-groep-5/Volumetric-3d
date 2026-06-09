@@ -96,6 +96,7 @@ private:
     std::chrono::steady_clock::time_point lastNoCameraLog_{};
     std::string lastError_;
     bool connected_ = false;
+    int consecutiveFrameTimeouts_ = 0;
 };
 
 }  // namespace femto

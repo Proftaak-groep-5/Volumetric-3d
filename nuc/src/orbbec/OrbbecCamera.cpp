@@ -18,6 +18,8 @@ namespace femto
 {
     namespace
     {
+        constexpr int kFrameWaitTimeoutMs = 500;
+        constexpr int kMaxConsecutiveFrameTimeouts = 2;
 
         nlohmann::json profileToJson(int width, int height, int fps, const std::string &format)
         {
@@ -734,6 +736,7 @@ namespace femto
         metadata_["connected"] = false;
         latestColorFrame_.reset();
         latestDepthFrame_.reset();
+        consecutiveFrameTimeouts_ = 0;
         if (wasConnected)
         {
             log::get()->warn("event=camera state=disconnected");
@@ -975,6 +978,7 @@ namespace femto
                     impl_->pipeline->start(impl_->pipelineConfig);
 
                     connected_ = true;
+                    consecutiveFrameTimeouts_ = 0;
                     lastError_.clear();
                     rebuildMetadataLocked();
                     rebuildCapabilitiesLocked();
@@ -1018,17 +1022,40 @@ namespace femto
         throw std::runtime_error("built without Orbbec SDK");
 #else
         std::shared_ptr<ob::FrameSet> frameSet;
+        ob::Pipeline *pipeline = nullptr;
         {
             std::scoped_lock lock(mutex_);
             if (!impl_->pipeline)
             {
                 return;
             }
-            frameSet = impl_->pipeline->waitForFrameset(1000);
+            pipeline = impl_->pipeline.get();
+        }
+        frameSet = pipeline->waitForFrameset(kFrameWaitTimeoutMs);
+        if (reconnectRequested_ || restartRequested_)
+        {
+            return;
         }
         if (!frameSet)
         {
+            std::scoped_lock lock(mutex_);
+            if (!connected_)
+            {
+                return;
+            }
+            ++consecutiveFrameTimeouts_;
+            lastError_ = "timed out waiting for camera frames";
+            log::get()->warn("event=camera state=frame_timeout consecutive={} timeout_ms={}", consecutiveFrameTimeouts_, kFrameWaitTimeoutMs);
+            if (consecutiveFrameTimeouts_ >= kMaxConsecutiveFrameTimeouts)
+            {
+                log::get()->warn("event=camera action=reconnect reason=consecutive_frame_timeouts count={}", consecutiveFrameTimeouts_);
+                disconnectLocked();
+            }
             return;
+        }
+        {
+            std::scoped_lock lock(mutex_);
+            consecutiveFrameTimeouts_ = 0;
         }
 
         ColorCallback colorCallback;
