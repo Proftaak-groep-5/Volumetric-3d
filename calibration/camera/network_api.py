@@ -327,17 +327,11 @@ class NetworkApiCamera(CameraDevice):
         if not bool(response.get("ok", False)):
             raise RuntimeError(f"Failed to update network camera settings for {self._camera_id}: {response}")
 
-        if bool(response.get("restart_required", False)):
-            _http_json_request(
-                f"{self._base_url}/settings/restart-streams",
-                timeout_s=max(config_timeout_s, 3.0),
-                method="POST",
-                payload={},
-            )
+        restart_required = bool(response.get("restart_required", False))
+        if restart_required:
             time.sleep(0.5)
-
-        # Refresh cached calibration after any settings change so callers see the current stream geometry.
-        self.refresh_metadata(timeout_s=config_timeout_s, retries=2, retry_delay_s=0.25)
+            # Refresh cached calibration after a stream restart so callers see the current geometry.
+            self.refresh_metadata(timeout_s=config_timeout_s, retries=6, retry_delay_s=0.5)
 
         return response
 

@@ -318,6 +318,7 @@ namespace femto
     {
         std::scoped_lock lock(mutex_);
         nlohmann::json applied = nlohmann::json::array();
+        nlohmann::json changed = nlohmann::json::array();
         nlohmann::json errors = nlohmann::json::array();
         bool restartRequired = false;
 
@@ -340,8 +341,15 @@ namespace femto
                     addUnsupported(path, "property not supported");
                     return;
                 }
+                if (impl_->device->isPropertySupported(static_cast<OBPropertyID>(propertyId), OB_PERMISSION_READ) &&
+                    impl_->device->getIntProperty(static_cast<OBPropertyID>(propertyId)) == *value)
+                {
+                    applied.push_back(path);
+                    return;
+                }
                 impl_->device->setIntProperty(static_cast<OBPropertyID>(propertyId), *value);
                 applied.push_back(path);
+                changed.push_back(path);
             }
             catch (const std::exception &ex)
             {
@@ -361,8 +369,15 @@ namespace femto
                     addUnsupported(path, "property not supported");
                     return;
                 }
+                if (impl_->device->isPropertySupported(static_cast<OBPropertyID>(propertyId), OB_PERMISSION_READ) &&
+                    impl_->device->getBoolProperty(static_cast<OBPropertyID>(propertyId)) == value)
+                {
+                    applied.push_back(path);
+                    return;
+                }
                 impl_->device->setBoolProperty(static_cast<OBPropertyID>(propertyId), value);
                 applied.push_back(path);
+                changed.push_back(path);
             }
             catch (const std::exception &ex)
             {
@@ -371,50 +386,88 @@ namespace femto
         };
 #endif
 
+        const auto applyBool = [&](bool &target, bool value, const std::string &path, bool requiresRestart = false)
+        {
+            applied.push_back(path);
+            if (target == value)
+            {
+                return;
+            }
+            target = value;
+            changed.push_back(path);
+            if (requiresRestart)
+            {
+                restartRequired = true;
+            }
+        };
+        const auto applyInt = [&](int &target, int value, const std::string &path, bool requiresRestart = false)
+        {
+            applied.push_back(path);
+            if (target == value)
+            {
+                return;
+            }
+            target = value;
+            changed.push_back(path);
+            if (requiresRestart)
+            {
+                restartRequired = true;
+            }
+        };
+        const auto applyString = [&](std::string &target, std::string value, const std::string &path)
+        {
+            applied.push_back(path);
+            if (target == value)
+            {
+                return;
+            }
+            target = std::move(value);
+            changed.push_back(path);
+        };
+        const auto applyOptionalInt = [&](std::optional<int> &target, int value, const std::string &path)
+        {
+            if (target != value)
+            {
+                target = value;
+                changed.push_back(path);
+            }
+        };
+
         if (patch.contains("color"))
         {
             const auto &color = patch.at("color");
             if (color.contains("enabled"))
             {
-                runtimeSettings_.colorEnabled = color.at("enabled").get<bool>();
+                applyBool(runtimeSettings_.colorEnabled, color.at("enabled").get<bool>(), "color.enabled");
                 config_.color.enabled = runtimeSettings_.colorEnabled;
-                applied.push_back("color.enabled");
             }
             if (color.contains("target_bitrate_mbps"))
             {
-                config_.color.targetBitrateMbps = color.at("target_bitrate_mbps").get<int>();
-                applied.push_back("color.target_bitrate_mbps");
+                applyInt(config_.color.targetBitrateMbps, color.at("target_bitrate_mbps").get<int>(), "color.target_bitrate_mbps");
             }
             if (color.contains("width"))
             {
-                config_.color.width = color.at("width").get<int>();
-                restartRequired = true;
-                applied.push_back("color.width");
+                applyInt(config_.color.width, color.at("width").get<int>(), "color.width", true);
             }
             if (color.contains("height"))
             {
-                config_.color.height = color.at("height").get<int>();
-                restartRequired = true;
-                applied.push_back("color.height");
+                applyInt(config_.color.height, color.at("height").get<int>(), "color.height", true);
             }
             if (color.contains("fps"))
             {
-                config_.color.fps = color.at("fps").get<int>();
-                restartRequired = true;
-                applied.push_back("color.fps");
+                applyInt(config_.color.fps, color.at("fps").get<int>(), "color.fps", true);
             }
             if (color.contains("exposure_auto"))
             {
-                runtimeSettings_.colorExposureAuto = color.at("exposure_auto").get<bool>();
+                applyBool(runtimeSettings_.colorExposureAuto, color.at("exposure_auto").get<bool>(), "color.exposure_auto");
 #if NUC_HAS_ORBBEC
                 trySetBool(OB_PROP_COLOR_AUTO_EXPOSURE_BOOL, runtimeSettings_.colorExposureAuto, "color.exposure_auto");
 #else
-                applied.push_back("color.exposure_auto");
 #endif
             }
             if (color.contains("exposure_value"))
             {
-                runtimeSettings_.colorExposureValue = color.at("exposure_value").get<int>();
+                applyOptionalInt(runtimeSettings_.colorExposureValue, color.at("exposure_value").get<int>(), "color.exposure_value");
 #if NUC_HAS_ORBBEC
                 trySetInt(OB_PROP_COLOR_EXPOSURE_INT, runtimeSettings_.colorExposureValue, "color.exposure_value");
 #else
@@ -423,7 +476,7 @@ namespace femto
             }
             if (color.contains("gain"))
             {
-                runtimeSettings_.colorGain = color.at("gain").get<int>();
+                applyOptionalInt(runtimeSettings_.colorGain, color.at("gain").get<int>(), "color.gain");
 #if NUC_HAS_ORBBEC
                 trySetInt(OB_PROP_COLOR_GAIN_INT, runtimeSettings_.colorGain, "color.gain");
 #else
@@ -432,16 +485,15 @@ namespace femto
             }
             if (color.contains("white_balance_auto"))
             {
-                runtimeSettings_.colorWhiteBalanceAuto = color.at("white_balance_auto").get<bool>();
+                applyBool(runtimeSettings_.colorWhiteBalanceAuto, color.at("white_balance_auto").get<bool>(), "color.white_balance_auto");
 #if NUC_HAS_ORBBEC
                 trySetBool(OB_PROP_COLOR_AUTO_WHITE_BALANCE_BOOL, runtimeSettings_.colorWhiteBalanceAuto, "color.white_balance_auto");
 #else
-                applied.push_back("color.white_balance_auto");
 #endif
             }
             if (color.contains("white_balance_value"))
             {
-                runtimeSettings_.colorWhiteBalanceValue = color.at("white_balance_value").get<int>();
+                applyOptionalInt(runtimeSettings_.colorWhiteBalanceValue, color.at("white_balance_value").get<int>(), "color.white_balance_value");
 #if NUC_HAS_ORBBEC
                 trySetInt(OB_PROP_COLOR_WHITE_BALANCE_INT, runtimeSettings_.colorWhiteBalanceValue, "color.white_balance_value");
 #else
@@ -450,7 +502,7 @@ namespace femto
             }
             if (color.contains("brightness"))
             {
-                runtimeSettings_.colorBrightness = color.at("brightness").get<int>();
+                applyOptionalInt(runtimeSettings_.colorBrightness, color.at("brightness").get<int>(), "color.brightness");
 #if NUC_HAS_ORBBEC
                 trySetInt(OB_PROP_COLOR_BRIGHTNESS_INT, runtimeSettings_.colorBrightness, "color.brightness");
 #else
@@ -459,7 +511,7 @@ namespace femto
             }
             if (color.contains("contrast"))
             {
-                runtimeSettings_.colorContrast = color.at("contrast").get<int>();
+                applyOptionalInt(runtimeSettings_.colorContrast, color.at("contrast").get<int>(), "color.contrast");
 #if NUC_HAS_ORBBEC
                 trySetInt(OB_PROP_COLOR_CONTRAST_INT, runtimeSettings_.colorContrast, "color.contrast");
 #else
@@ -468,7 +520,7 @@ namespace femto
             }
             if (color.contains("saturation"))
             {
-                runtimeSettings_.colorSaturation = color.at("saturation").get<int>();
+                applyOptionalInt(runtimeSettings_.colorSaturation, color.at("saturation").get<int>(), "color.saturation");
 #if NUC_HAS_ORBBEC
                 trySetInt(OB_PROP_COLOR_SATURATION_INT, runtimeSettings_.colorSaturation, "color.saturation");
 #else
@@ -482,31 +534,26 @@ namespace femto
             const auto &depthPreview = patch.at("depth_preview");
             if (depthPreview.contains("enabled"))
             {
-                runtimeSettings_.depthPreviewEnabled = depthPreview.at("enabled").get<bool>();
+                applyBool(runtimeSettings_.depthPreviewEnabled, depthPreview.at("enabled").get<bool>(), "depth_preview.enabled");
                 config_.depthPreview.enabled = runtimeSettings_.depthPreviewEnabled;
-                applied.push_back("depth_preview.enabled");
             }
             if (depthPreview.contains("min_depth_mm"))
             {
-                runtimeSettings_.depthPreviewMinMm = depthPreview.at("min_depth_mm").get<int>();
+                applyInt(runtimeSettings_.depthPreviewMinMm, depthPreview.at("min_depth_mm").get<int>(), "depth_preview.min_depth_mm");
                 config_.depthPreview.minDepthMm = runtimeSettings_.depthPreviewMinMm;
-                applied.push_back("depth_preview.min_depth_mm");
             }
             if (depthPreview.contains("max_depth_mm"))
             {
-                runtimeSettings_.depthPreviewMaxMm = depthPreview.at("max_depth_mm").get<int>();
+                applyInt(runtimeSettings_.depthPreviewMaxMm, depthPreview.at("max_depth_mm").get<int>(), "depth_preview.max_depth_mm");
                 config_.depthPreview.maxDepthMm = runtimeSettings_.depthPreviewMaxMm;
-                applied.push_back("depth_preview.max_depth_mm");
             }
             if (depthPreview.contains("mode"))
             {
-                config_.depthPreview.mode = depthPreview.at("mode").get<std::string>();
-                applied.push_back("depth_preview.mode");
+                applyString(config_.depthPreview.mode, depthPreview.at("mode").get<std::string>(), "depth_preview.mode");
             }
             if (depthPreview.contains("target_bitrate_mbps"))
             {
-                config_.depthPreview.targetBitrateMbps = depthPreview.at("target_bitrate_mbps").get<int>();
-                applied.push_back("depth_preview.target_bitrate_mbps");
+                applyInt(config_.depthPreview.targetBitrateMbps, depthPreview.at("target_bitrate_mbps").get<int>(), "depth_preview.target_bitrate_mbps");
             }
         }
 
@@ -515,33 +562,23 @@ namespace femto
             const auto &depth = patch.at("depth");
             if (depth.contains("enabled"))
             {
-                config_.depth.enabled = depth.at("enabled").get<bool>();
-                applied.push_back("depth.enabled");
-                restartRequired = true;
+                applyBool(config_.depth.enabled, depth.at("enabled").get<bool>(), "depth.enabled", true);
             }
             if (depth.contains("width"))
             {
-                config_.depth.width = depth.at("width").get<int>();
-                restartRequired = true;
-                applied.push_back("depth.width");
+                applyInt(config_.depth.width, depth.at("width").get<int>(), "depth.width", true);
             }
             if (depth.contains("height"))
             {
-                config_.depth.height = depth.at("height").get<int>();
-                restartRequired = true;
-                applied.push_back("depth.height");
+                applyInt(config_.depth.height, depth.at("height").get<int>(), "depth.height", true);
             }
             if (depth.contains("fps"))
             {
-                config_.depth.fps = depth.at("fps").get<int>();
-                restartRequired = true;
-                applied.push_back("depth.fps");
+                applyInt(config_.depth.fps, depth.at("fps").get<int>(), "depth.fps", true);
             }
             if (depth.contains("align_to_color"))
             {
-                config_.depth.alignToColor = depth.at("align_to_color").get<bool>();
-                restartRequired = true;
-                applied.push_back("depth.align_to_color");
+                applyBool(config_.depth.alignToColor, depth.at("align_to_color").get<bool>(), "depth.align_to_color", true);
             }
         }
 
@@ -550,14 +587,12 @@ namespace femto
             const auto &depthBinary = patch.at("authoritative_depth");
             if (depthBinary.contains("enabled"))
             {
-                runtimeSettings_.depthBinaryEnabled = depthBinary.at("enabled").get<bool>();
+                applyBool(runtimeSettings_.depthBinaryEnabled, depthBinary.at("enabled").get<bool>(), "authoritative_depth.enabled");
                 config_.depthBinary.enabled = runtimeSettings_.depthBinaryEnabled;
-                applied.push_back("authoritative_depth.enabled");
             }
             if (depthBinary.contains("compression_level"))
             {
-                config_.depthBinary.compressionLevel = depthBinary.at("compression_level").get<int>();
-                applied.push_back("authoritative_depth.compression_level");
+                applyInt(config_.depthBinary.compressionLevel, depthBinary.at("compression_level").get<int>(), "authoritative_depth.compression_level");
             }
         }
 
@@ -566,10 +601,24 @@ namespace femto
             restartRequested_ = true;
         }
 
+        const auto uniqueJsonArray = [](const nlohmann::json &values)
+        {
+            nlohmann::json result = nlohmann::json::array();
+            for (const auto &value : values)
+            {
+                if (std::find(result.begin(), result.end(), value) == result.end())
+                {
+                    result.push_back(value);
+                }
+            }
+            return result;
+        };
+
         return {
             {"ok", errors.empty()},
             {"restart_required", restartRequired},
-            {"applied", applied},
+            {"applied", uniqueJsonArray(applied)},
+            {"changed", uniqueJsonArray(changed)},
             {"errors", errors},
             {"settings",
              {
