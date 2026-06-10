@@ -40,6 +40,14 @@ services:
         - DISCORD_WEBHOOKURL=https://discord.com/api/webhooks/1506270977850343444/fgM_FNrCiQzZBNXpexVIYa-M-fRUwtIlHbMrd18ZsUZJRUQzCeo2hIuTVy9aHfoP_MUO
       restart: unless-stopped
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
   backend:
     build:
         context: platform/backend

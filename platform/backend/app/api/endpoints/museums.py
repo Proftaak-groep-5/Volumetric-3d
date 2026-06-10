@@ -4,6 +4,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException
 
+from platform.backend.events.publisher import publish_event
 from ...events.event_bus import BaseEvent
 
 from ...core.deps import DbSession
@@ -30,7 +31,7 @@ async def get_all_museums(
 
     return museums
 
-# OLD ENDPOINT => NO EVENTS
+#OLD ENDPOINT => NO EVENTS
 # @router.post("/createMuseum", response_model=MuseumRead, status_code=201, responses={400: {"description": "Invalid request"}})
 # async def create_museum(
 #         db: DbSession,
@@ -43,17 +44,25 @@ async def get_all_museums(
 #
 #     return museum
 
-# NEW ENDPOINT => EVENT
+# NEW ENDPOINT => RABBITMQ EVENT
 @router.post("/createMuseum")
 def create_museum(data: dict):
-    event = BaseEvent(
-        event_type="museum_created",
-        payload=data
-    )
+    publish_event(data)
+    return {"status", "event sent"}
 
-    event_bus.publish(event)
 
-    return {"status": "event_sent"}
+
+# NEW ENDPOINT => CUSTOM EVENT (FUN FOR AFTER HOURS - Herman J)
+# @router.post("/createMuseum")
+# def create_museum(data: dict):
+#     event = BaseEvent(
+#         event_type="museum_created",
+#         payload=data
+#     )
+#
+#     event_bus.publish(event)
+#
+#     return {"status": "event_sent"}
 
 
 @router.get("/getById", response_model=MuseumRead, status_code=200, responses={400: {"description": "Invalid request"}})

@@ -3,8 +3,6 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from platform.backend.app.events.event_bus import EventBus
-
 from .core.database import init_db
 from .api.endpoints.user import router as user_router
 from .api.endpoints.museums import router as museum_router
@@ -14,8 +12,6 @@ from .api.endpoints.recording import router as recording_router
 async def lifespan(app: FastAPI):
     await init_db()
     yield
-
-event_bus = EventBus()
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(user_router)
