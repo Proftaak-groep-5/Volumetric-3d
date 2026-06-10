@@ -3,23 +3,29 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
     get_calibration_store,
+    get_calibration_runner_service,
     get_camera_manager,
     get_triangulation_service,
     get_volumetric_capture_service,
 )
 from app.schemas import (
+    CalibrationRunStatusResponse,
     CameraInfo,
     CameraListResponse,
+    ConfigureNetworkCamerasRequest,
+    ConfigureNetworkCamerasResponse,
     CreateVolumetricCaptureRequest,
     CreateVolumetricCaptureResponse,
     CreateVolumetricPointRequest,
     CreateVolumetricPointResponse,
+    StartCalibrationResponse,
 )
+from app.services.calibration_runner import CalibrationRunnerService
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager
 from app.services.triangulation import TriangulationService
@@ -33,6 +39,31 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/calibration/status")
+def calibration_status(
+    calibration_runner: Annotated[CalibrationRunnerService, Depends(get_calibration_runner_service)],
+) -> CalibrationRunStatusResponse:
+    snapshot = calibration_runner.status()
+    return CalibrationRunStatusResponse(**snapshot.__dict__)
+
+
+@router.post("/calibration/run", responses={409: {"description": "Calibration is already running"}})
+def run_calibration(
+    calibration_runner: Annotated[CalibrationRunnerService, Depends(get_calibration_runner_service)],
+) -> StartCalibrationResponse:
+    try:
+        snapshot = calibration_runner.start()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return StartCalibrationResponse(
+        accepted=True,
+        status=CalibrationRunStatusResponse(**snapshot.__dict__),
+    )
+
+
 @router.get("/cameras")
 def list_cameras(camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)]) -> CameraListResponse:
     cameras = []
@@ -43,6 +74,7 @@ def list_cameras(camera_manager: Annotated[CameraStreamManager, Depends(get_came
                 camera_id=camera_id,
                 serial_number=str(item.get("serial_number") or ""),
                 device_name=str(item.get("device_name") or ""),
+                connection_type=str(item.get("connection_type") or ""),
                 width=int(item["width"]),
                 height=int(item["height"]),
                 fps=int(item["fps"]),
@@ -55,6 +87,15 @@ def list_cameras(camera_manager: Annotated[CameraStreamManager, Depends(get_came
     return CameraListResponse(cameras=cameras)
 
 
+@router.post("/cameras/configure-network", responses={400: {"description": "Failed to configure one or more network cameras"}})
+def configure_network_cameras(
+    payload: ConfigureNetworkCamerasRequest,
+    camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)],
+) -> ConfigureNetworkCamerasResponse:
+    results = camera_manager.configure_network_camera_streams(payload.camera_ids)
+    return ConfigureNetworkCamerasResponse(results=results)
+
+
 @router.get("/frame/{camera_id}.jpg", responses={404: {"description": "No frame available for camera"}})
 def frame(camera_id: str, camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)]) -> Response:
     snapshot = camera_manager.get_snapshot(camera_id)
@@ -65,23 +106,32 @@ def frame(camera_id: str, camera_manager: Annotated[CameraStreamManager, Depends
 
 
 @router.get("/stream/{camera_id}.mjpg", responses={404: {"description": "Camera was not found"}})
-async def stream(camera_id: str, camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)]) -> StreamingResponse:
+async def stream(
+    camera_id: str,
+    request: Request,
+    camera_manager: Annotated[CameraStreamManager, Depends(get_camera_manager)],
+) -> StreamingResponse:
     if camera_id not in camera_manager.camera_ids():
         raise HTTPException(status_code=404, detail=f"Camera {camera_id} was not found")
 
     boundary = "frame"
+    frame_interval_s = 1.0 / max(1, camera_manager.target_fps())
 
     async def frame_generator():
+        last_frame_index = -1
         while True:
+            if await request.is_disconnected():
+                break
             snapshot = camera_manager.get_snapshot(camera_id)
-            if snapshot is not None and snapshot.jpeg is not None:
+            if snapshot is not None and snapshot.jpeg is not None and snapshot.frame_index != last_frame_index:
                 chunk = (
                     f"--{boundary}\r\n"
                     "Content-Type: image/jpeg\r\n"
                     f"Content-Length: {len(snapshot.jpeg)}\r\n\r\n"
                 ).encode("utf-8")
                 yield chunk + snapshot.jpeg + b"\r\n"
-            await asyncio.sleep(1.0 / 20.0)
+                last_frame_index = snapshot.frame_index
+            await asyncio.sleep(frame_interval_s)
 
     return StreamingResponse(
         frame_generator(),

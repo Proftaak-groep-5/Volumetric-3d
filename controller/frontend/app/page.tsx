@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 
 import { CameraGrid } from "@/components/camera-grid";
 import {
+    CalibrationRunStatusResponse,
     CameraInfo,
     CameraListResponse,
     Observation,
+    StartCalibrationResponse,
     VolumetricCaptureResponse,
     VolumetricPointResponse,
 } from "@/lib/types";
@@ -18,9 +20,11 @@ export default function HomePage() {
     const [observations, setObservations] = useState<Record<string, Observation>>({});
     const [result, setResult] = useState<VolumetricPointResponse | null>(null);
     const [captureResult, setCaptureResult] = useState<VolumetricCaptureResponse | null>(null);
+    const [calibrationStatus, setCalibrationStatus] = useState<CalibrationRunStatusResponse | null>(null);
     const [error, setError] = useState<string>("");
     const [busy, setBusy] = useState<boolean>(false);
     const [captureBusy, setCaptureBusy] = useState<boolean>(false);
+    const [calibrationBusy, setCalibrationBusy] = useState<boolean>(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -43,11 +47,29 @@ export default function HomePage() {
             }
         };
 
+        const fetchCalibrationStatus = async () => {
+            try {
+                const response = await fetch(`${apiBaseUrl}/api/calibration/status`);
+                if (!response.ok) {
+                    return;
+                }
+                const data: CalibrationRunStatusResponse = await response.json();
+                if (!cancelled) {
+                    setCalibrationStatus(data);
+                }
+            } catch {
+                // Keep last known status; transient network errors should not wipe UI state.
+            }
+        };
+
         fetchCameras();
+        fetchCalibrationStatus();
         const interval = globalThis.setInterval(fetchCameras, 2000);
+        const statusInterval = globalThis.setInterval(fetchCalibrationStatus, 2000);
         return () => {
             cancelled = true;
             globalThis.clearInterval(interval);
+            globalThis.clearInterval(statusInterval);
         };
     }, []);
 
@@ -70,7 +92,7 @@ export default function HomePage() {
         try {
             const payload = {
                 camera_ids: cameras.map((camera) => camera.camera_id),
-                pixel_step: 4,
+                pixel_step: 1,
                 depth_min_m: 0.15,
                 depth_max_m: 5,
             };
@@ -124,6 +146,29 @@ export default function HomePage() {
         }
     };
 
+    const runCalibration = async () => {
+        setCalibrationBusy(true);
+        setError("");
+
+        try {
+            const response = await fetch(`${apiBaseUrl}/api/calibration/run`, {
+                method: "POST",
+            });
+
+            if (!response.ok) {
+                const detail = await response.json().catch(() => ({}));
+                throw new Error(detail.detail || `Failed to start calibration: ${response.status}`);
+            }
+
+            const data: StartCalibrationResponse = await response.json();
+            setCalibrationStatus(data.status);
+        } catch (requestError) {
+            setError(requestError instanceof Error ? requestError.message : "Unknown error while starting calibration");
+        } finally {
+            setCalibrationBusy(false);
+        }
+    };
+
     return (
         <main className="page-shell">
             <section className="hero">
@@ -134,11 +179,15 @@ export default function HomePage() {
             <section className="toolbar">
                 <div className="status">Connected cameras: {cameras.length}</div>
                 <div className="status">Picked views: {pickedCount}</div>
+                <div className="status">Calibration: {calibrationStatus?.running ? "running" : calibrationStatus?.state || "idle"}</div>
                 <button onClick={createPoint} disabled={busy || pickedCount < 2}>
                     {busy ? "Creating..." : "Create Volumetric Point"}
                 </button>
                 <button onClick={createStitchedCapture} disabled={captureBusy || cameras.length < 1}>
                     {captureBusy ? "Capturing..." : "Capture Stitched Point Cloud"}
+                </button>
+                <button onClick={runCalibration} disabled={calibrationBusy || calibrationStatus?.running}>
+                    {calibrationStatus?.running ? "Calibrating..." : calibrationBusy ? "Starting..." : "Calibrate Cameras"}
                 </button>
                 <button className="secondary" onClick={clearPicks}>
                     Clear Picks
@@ -146,6 +195,25 @@ export default function HomePage() {
             </section>
 
             {error && <section className="error-box">{error}</section>}
+
+            <section className="result-panel">
+                <h2>Calibration Status</h2>
+                <p>state: {calibrationStatus?.state || "idle"}</p>
+                <p>running: {calibrationStatus?.running ? "yes" : "no"}</p>
+                <p>started: {calibrationStatus?.started_at_utc || "n/a"}</p>
+                <p>finished: {calibrationStatus?.finished_at_utc || "n/a"}</p>
+                <p>exit code: {calibrationStatus?.return_code ?? "n/a"}</p>
+                <p>message: {calibrationStatus?.message || "No calibration run yet."}</p>
+                {calibrationStatus?.command && (
+                    <p>command: <code>{calibrationStatus.command.join(" ")}</code></p>
+                )}
+                {calibrationStatus?.log_file && (
+                    <p>log file: <code>{calibrationStatus.log_file}</code></p>
+                )}
+                {calibrationStatus?.output_tail && (
+                    <pre className="log-tail">{calibrationStatus.output_tail}</pre>
+                )}
+            </section>
 
             <CameraGrid apiBaseUrl={apiBaseUrl} cameras={cameras} observations={observations} onPick={onPick} />
 

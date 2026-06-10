@@ -9,8 +9,8 @@ from calibration.calibration.aruco_cube import ArucoCubeModel
 from calibration.calibration.detector import ArucoMarkerDetector
 from calibration.calibration.multi_camera_calibrator import MultiCameraCalibrator
 from calibration.camera.base import CameraDevice
-from calibration.camera.femto_bolt import discover_femto_bolt_cameras
 from calibration.camera.mock_camera import create_mock_cameras
+from calibration.camera.network_api import discover_network_api_cameras
 from calibration.config import CalibrationConfig, load_config
 from calibration.io.export_json import export_calibration_results
 from calibration.io.visualization import DebugVisualizer
@@ -107,17 +107,13 @@ def build_cameras(args: argparse.Namespace, config: CalibrationConfig, cube_mode
             seed=int(args.mock_seed),
         )
 
-    cameras = discover_femto_bolt_cameras(
-        color_resolution=config.color_resolution,
-        depth_resolution=config.depth_resolution,
-        fps=config.fps,
-        max_cameras=config.max_cameras,
+    network_cameras = discover_network_api_cameras(
         use_depth=config.use_depth,
         allowed_camera_ids=config.camera_ids,
-        camera_tuning=config.camera.to_dict(),
+        discovery_config=config.network_camera,
     )
 
-    return list(cameras)
+    return list(network_cameras)
 
 
 def load_and_prepare_config(args: argparse.Namespace) -> CalibrationConfig:

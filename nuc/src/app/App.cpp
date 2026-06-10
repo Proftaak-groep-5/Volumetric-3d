@@ -153,6 +153,22 @@ void prependToPathEnvironment(const std::filesystem::path &entry) {
     _putenv_s("PATH", updatedPath.c_str());
 }
 
+bool writeJpegBytesToFile(const std::filesystem::path &path, const std::shared_ptr<const std::vector<uint8_t>> &jpegBytes) {
+    if(!jpegBytes || jpegBytes->empty()) {
+        return false;
+    }
+    if(!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    FILE *file = nullptr;
+    if(_wfopen_s(&file, path.wstring().c_str(), L"wb") != 0 || !file) {
+        return false;
+    }
+    const auto written = fwrite(jpegBytes->data(), 1, jpegBytes->size(), file);
+    fclose(file);
+    return written == jpegBytes->size();
+}
+
 }  // namespace
 
 App::App() = default;
@@ -195,8 +211,15 @@ int App::run(int argc, char **argv) {
         [this] { return metadataJson(); },
         [this] { return streamsJson(); },
         [this] { return camera_->settingsJson(); },
-        [this](const nlohmann::json &patch) { return camera_->applySettings(patch); },
+        [this](const nlohmann::json &patch) {
+            auto result = camera_->applySettings(patch);
+            if(result.value("restart_required", false)) {
+                restartPreviewPipelines();
+            }
+            return result;
+        },
         [this] {
+            restartPreviewPipelines();
             camera_->requestRestartStreams();
             return nlohmann::json{ { "ok", true }, { "requested", "restart_streams" } };
         },
@@ -207,6 +230,7 @@ int App::run(int argc, char **argv) {
             return nlohmann::json{ { "ok", true }, { "requested", "reconnect" } };
         },
         [this] {
+            restartPreviewPipelines();
             camera_->requestRestartStreams();
             return nlohmann::json{ { "ok", true }, { "requested", "restart" } };
         },
@@ -297,7 +321,8 @@ int App::runTestCapture(const std::filesystem::path &outputDir) {
         }
     }
 
-    const auto wroteColor = imageio::writeRgbJpegFile(colorPath, color->bytes.data(), color->width, color->height);
+    const auto wroteColor = color->jpegBytes ? writeJpegBytesToFile(colorPath, color->jpegBytes)
+                                             : imageio::writeRgbJpegFile(colorPath, color->bytes.data(), color->width, color->height);
     const auto wroteDepth = imageio::writeGray16PngFile(depthPath, depth->values.data(), depth->width, depth->height);
 
     log::get()->info("test capture metadata: {}", metadata.dump(2));
@@ -339,6 +364,12 @@ void App::wireCallbacks() {
 
 void App::handleColorFrame(const OrbbecCamera::FrameEnvelope &frame) {
     if(camera_->runtimeSettings().colorEnabled) {
+        if(frame.jpegBytes) {
+            if(!colorPreview_->pushJpegFrame(frame.jpegBytes, frame.timestampUs)) {
+                stats_.onDroppedOutputFrame();
+            }
+            return;
+        }
         auto resized = resizeRgbNearest(frame.bytes, frame.width, frame.height, config_.color.width, config_.color.height);
         if(!colorPreview_->pushRgbFrame(resized.data(), resized.size(), frame.timestampUs)) {
             stats_.onDroppedOutputFrame();
@@ -405,6 +436,15 @@ void App::configureRuntimeEnvironment() const {
         }
     }
 #endif
+}
+
+void App::restartPreviewPipelines() {
+    if(colorPreview_) {
+        colorPreview_->start(config_.color.width, config_.color.height, config_.color.fps);
+    }
+    if(depthPreview_) {
+        depthPreview_->start(config_.depth.width, config_.depth.height, config_.depth.fps);
+    }
 }
 
 bool App::syntheticSourceEnabled() const {

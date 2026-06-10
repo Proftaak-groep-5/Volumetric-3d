@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 #if NUC_HAS_ORBBEC
@@ -24,6 +25,25 @@ nlohmann::json profileToJson(int width, int height, int fps, const std::string &
         { "format", format },
     };
 }
+
+#if NUC_HAS_ORBBEC
+int colorProfilePriority(int format) {
+    switch(format) {
+    case OB_FORMAT_MJPEG:
+        return 0;
+    case OB_FORMAT_RGB:
+    case OB_FORMAT_BGR:
+    case OB_FORMAT_BGRA:
+    case OB_FORMAT_RGBA:
+        return 1;
+    case OB_FORMAT_YUYV:
+    case OB_FORMAT_YUY2:
+        return 2;
+    default:
+        return 3;
+    }
+}
+#endif
 
 std::string obFormatToString(int format) {
     switch(format) {
@@ -196,6 +216,13 @@ nlohmann::json OrbbecCamera::settingsJson() const {
         { "brightness", runtimeSettings_.colorBrightness ? nlohmann::json(*runtimeSettings_.colorBrightness) : nlohmann::json(nullptr) },
         { "contrast", runtimeSettings_.colorContrast ? nlohmann::json(*runtimeSettings_.colorContrast) : nlohmann::json(nullptr) },
         { "saturation", runtimeSettings_.colorSaturation ? nlohmann::json(*runtimeSettings_.colorSaturation) : nlohmann::json(nullptr) },
+    };
+    settings["depth"] = {
+        { "enabled", config_.depth.enabled },
+        { "width", config_.depth.width },
+        { "height", config_.depth.height },
+        { "fps", config_.depth.fps },
+        { "align_to_color", config_.depth.alignToColor },
     };
     settings["depth_preview"] = {
         { "enabled", runtimeSettings_.depthPreviewEnabled },
@@ -411,6 +438,35 @@ nlohmann::json OrbbecCamera::applySettings(const nlohmann::json &patch) {
         }
     }
 
+    if(patch.contains("depth")) {
+        const auto &depth = patch.at("depth");
+        if(depth.contains("enabled")) {
+            config_.depth.enabled = depth.at("enabled").get<bool>();
+            applied.push_back("depth.enabled");
+            restartRequired = true;
+        }
+        if(depth.contains("width")) {
+            config_.depth.width = depth.at("width").get<int>();
+            restartRequired = true;
+            applied.push_back("depth.width");
+        }
+        if(depth.contains("height")) {
+            config_.depth.height = depth.at("height").get<int>();
+            restartRequired = true;
+            applied.push_back("depth.height");
+        }
+        if(depth.contains("fps")) {
+            config_.depth.fps = depth.at("fps").get<int>();
+            restartRequired = true;
+            applied.push_back("depth.fps");
+        }
+        if(depth.contains("align_to_color")) {
+            config_.depth.alignToColor = depth.at("align_to_color").get<bool>();
+            restartRequired = true;
+            applied.push_back("depth.align_to_color");
+        }
+    }
+
     if(patch.contains("authoritative_depth")) {
         const auto &depthBinary = patch.at("authoritative_depth");
         if(depthBinary.contains("enabled")) {
@@ -428,14 +484,52 @@ nlohmann::json OrbbecCamera::applySettings(const nlohmann::json &patch) {
         restartRequested_ = true;
     }
 
-    const auto settings = settingsJson();
-
     return {
         { "ok", errors.empty() },
         { "restart_required", restartRequired },
         { "applied", applied },
         { "errors", errors },
-        { "settings", settings },
+        { "settings",
+          {
+              { "color",
+                {
+                    { "enabled", runtimeSettings_.colorEnabled },
+                    { "width", config_.color.width },
+                    { "height", config_.color.height },
+                    { "fps", config_.color.fps },
+                    { "target_bitrate_mbps", config_.color.targetBitrateMbps },
+                    { "exposure_auto", runtimeSettings_.colorExposureAuto },
+                    { "exposure_value", runtimeSettings_.colorExposureValue ? nlohmann::json(*runtimeSettings_.colorExposureValue) : nlohmann::json(nullptr) },
+                    { "gain", runtimeSettings_.colorGain ? nlohmann::json(*runtimeSettings_.colorGain) : nlohmann::json(nullptr) },
+                    { "white_balance_auto", runtimeSettings_.colorWhiteBalanceAuto },
+                    { "white_balance_value", runtimeSettings_.colorWhiteBalanceValue ? nlohmann::json(*runtimeSettings_.colorWhiteBalanceValue) : nlohmann::json(nullptr) },
+                    { "brightness", runtimeSettings_.colorBrightness ? nlohmann::json(*runtimeSettings_.colorBrightness) : nlohmann::json(nullptr) },
+                    { "contrast", runtimeSettings_.colorContrast ? nlohmann::json(*runtimeSettings_.colorContrast) : nlohmann::json(nullptr) },
+                    { "saturation", runtimeSettings_.colorSaturation ? nlohmann::json(*runtimeSettings_.colorSaturation) : nlohmann::json(nullptr) },
+                } },
+              { "depth",
+                {
+                    { "enabled", config_.depth.enabled },
+                    { "width", config_.depth.width },
+                    { "height", config_.depth.height },
+                    { "fps", config_.depth.fps },
+                    { "align_to_color", config_.depth.alignToColor },
+                } },
+              { "depth_preview",
+                {
+                    { "enabled", runtimeSettings_.depthPreviewEnabled },
+                    { "min_depth_mm", runtimeSettings_.depthPreviewMinMm },
+                    { "max_depth_mm", runtimeSettings_.depthPreviewMaxMm },
+                    { "target_bitrate_mbps", config_.depthPreview.targetBitrateMbps },
+                    { "mode", config_.depthPreview.mode },
+                } },
+              { "authoritative_depth",
+                {
+                    { "enabled", runtimeSettings_.depthBinaryEnabled },
+                    { "compression", config_.depthBinary.compression },
+                    { "compression_level", config_.depthBinary.compressionLevel },
+                } },
+          } },
     };
 }
 
@@ -612,14 +706,18 @@ bool OrbbecCamera::connectLocked() {
                 if(config_.color.enabled) {
                     auto colorProfiles = impl_->pipeline->getStreamProfileList(OB_SENSOR_COLOR);
                     std::shared_ptr<ob::VideoStreamProfile> selectedColor;
+                    int selectedColorPriority = std::numeric_limits<int>::max();
                     for(uint32_t i = 0; i < colorProfiles->getCount(); ++i) {
                         auto profile = colorProfiles->getProfile(i)->as<ob::VideoStreamProfile>();
                         const auto format = profile->getFormat();
                         if(profile->getWidth() == config_.color.width && profile->getHeight() == config_.color.height && profile->getFps() == config_.color.fps
                            && (format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
                                || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG)) {
-                            selectedColor = profile;
-                            break;
+                            const int priority = colorProfilePriority(format);
+                            if(!selectedColor || priority < selectedColorPriority) {
+                                selectedColor = profile;
+                                selectedColorPriority = priority;
+                            }
                         }
                     }
                     if(!selectedColor) {
@@ -628,8 +726,11 @@ bool OrbbecCamera::connectLocked() {
                             const auto format = profile->getFormat();
                             if(format == OB_FORMAT_RGB || format == OB_FORMAT_BGR || format == OB_FORMAT_BGRA || format == OB_FORMAT_RGBA || format == OB_FORMAT_YUYV
                                || format == OB_FORMAT_YUY2 || format == OB_FORMAT_MJPEG) {
-                                selectedColor = profile;
-                                break;
+                                const int priority = colorProfilePriority(format);
+                                if(!selectedColor || priority < selectedColorPriority) {
+                                    selectedColor = profile;
+                                    selectedColorPriority = priority;
+                                }
                             }
                         }
                     }
@@ -681,7 +782,9 @@ bool OrbbecCamera::connectLocked() {
                     }
                 }
 
-                impl_->pipeline->enableFrameSync();
+                if(config_.color.enabled && config_.depth.enabled) {
+                    impl_->pipeline->enableFrameSync();
+                }
                 impl_->pipeline->start(impl_->pipelineConfig);
 
                 connected_ = true;
@@ -774,17 +877,15 @@ void OrbbecCamera::captureOnce() {
                 yuyvToRgb(data, envelope.width, envelope.height, envelope.bytes);
                 break;
             case OB_FORMAT_MJPEG: {
-                auto decoded = imageio::decodeJpegToRgb(data, colorFrame->getDataSize());
-                if(decoded && decoded->width == envelope.width && decoded->height == envelope.height) {
-                    envelope.bytes = std::move(decoded->bytes);
-                }
+                auto jpegBytes = std::make_shared<std::vector<uint8_t>>(data, data + colorFrame->getDataSize());
+                envelope.jpegBytes = std::move(jpegBytes);
                 break;
             }
             default:
                 stats_.onDroppedOutputFrame();
                 break;
             }
-            if(!envelope.bytes.empty()) {
+            if(!envelope.bytes.empty() || envelope.jpegBytes) {
                 {
                     std::scoped_lock lock(mutex_);
                     latestColorFrame_ = envelope;

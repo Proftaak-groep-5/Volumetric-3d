@@ -9,6 +9,63 @@ services:
       POSTGRES_DB: testdb
     ports:
       - "5432:5432"
+
+  falco:
+    image: falcosecurity/falco:latest
+    container_name: falco
+    privileged: true
+    pid: host
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - /var/run/docker.sock:/host/var/run/docker.sock
+      - /proc:/host/proc:ro
+      - /etc:/host/etc:ro
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro
+      - /dev:/host/dev
+      - /lib/modules:/host/lib/modules:ro
+      - /boot:/host/boot:ro
+      - /usr:/host/usr:ro
+      - ./falco-rules:/etc/falco/rules.d:ro
+    environment:
+      - FALCO_RULES_FILES=/etc/falco/rules.d/custom-rules.yaml
+    restart: unless-stopped
+
+  falcosidekick:
+      image: falcosecurity/falcosidekick:latest
+      container_name: falcosidekick
+      ports:
+        - "2801:2801"
+      environment:
+        - DISCORD_WEBHOOKURL=https://discord.com/api/webhooks/1506270977850343444/fgM_FNrCiQzZBNXpexVIYa-M-fRUwtIlHbMrd18ZsUZJRUQzCeo2hIuTVy9aHfoP_MUO
+      restart: unless-stopped
+
+  backend:
+    build:
+        context: platform/backend
+    container_name: backend
+    restart: unless-stopped
+    env_file:
+      - platform/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_started
+
+  frontend:
+    build:
+      context: platform/frontend
+    container_name: frontend
+    restart: unless-stopped
+    env_file:
+      - platform/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_started
+
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin
@@ -21,3 +78,4 @@ services:
 volumes:
   postgres_data:
     driver: local
+

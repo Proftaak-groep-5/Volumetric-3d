@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - falco-deployment.yaml
+  - falcosidekick-service.yaml
+  - falcosidekick-deployment.yaml  
+  - falco-claim1-persistentvolumeclaim.yaml
+  - falco-claim2-persistentvolumeclaim.yaml
+  - falco-claim3-persistentvolumeclaim.yaml
+  - falco-claim5-persistentvolumeclaim.yaml
+  - falco-claim6-persistentvolumeclaim.yaml
+  - falco-claim7-persistentvolumeclaim.yaml
+  - falco-claim8-persistentvolumeclaim.yaml

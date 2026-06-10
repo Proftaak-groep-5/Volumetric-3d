@@ -9,6 +9,7 @@ class CameraInfo(BaseModel):
     camera_id: str
     serial_number: str | None = None
     device_name: str | None = None
+    connection_type: str | None = None
     width: int
     height: int
     fps: int
@@ -55,3 +56,28 @@ class CreateVolumetricCaptureResponse(BaseModel):
     points_per_camera: dict[str, int]
     cameras_used: list[str]
     debug: dict[str, Any] | None = None
+
+
+class ConfigureNetworkCamerasRequest(BaseModel):
+    camera_ids: list[str] | None = None
+
+
+class ConfigureNetworkCamerasResponse(BaseModel):
+    results: dict[str, dict[str, Any]]
+
+
+class CalibrationRunStatusResponse(BaseModel):
+    state: str
+    running: bool
+    started_at_utc: str | None = None
+    finished_at_utc: str | None = None
+    return_code: int | None = None
+    message: str | None = None
+    command: list[str] | None = None
+    log_file: str | None = None
+    output_tail: str | None = None
+
+
+class StartCalibrationResponse(BaseModel):
+    accepted: bool
+    status: CalibrationRunStatusResponse

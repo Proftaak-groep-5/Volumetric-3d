@@ -1,0 +1,11 @@
+server:
+  resources:
+    limits:
+      cpu: 300m
+      memory: 768Mi
+  service:
+    type: NodePort
+
+configs:
+  params:
+    server.insecure: true   # Maakt login makkelijker voor dev

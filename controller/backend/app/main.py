@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 from app.core.config import get_settings
+from app.services.calibration_runner import CalibrationRunnerService
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager
 from app.services.triangulation import TriangulationService
@@ -32,11 +33,17 @@ app.mount(
     name="captures",
 )
 
+def _startup_app() -> None:
+    if getattr(app.state, "_startup_complete", False):
+        return
 
-@app.on_event("startup")
-def startup() -> None:
     calibration_store = CalibrationStore(settings.calibration_file)
     calibration_store.load()
+    calibration_runner = CalibrationRunnerService(
+        repo_root=settings.repo_root,
+        calibration_config_file=settings.calibration_config_file,
+        calibration_store=calibration_store,
+    )
 
     camera_manager = CameraStreamManager(
         color_width=settings.color_width,
@@ -47,6 +54,7 @@ def startup() -> None:
         use_depth=settings.use_depth,
         max_cameras=settings.max_cameras,
         camera_tuning=settings.camera_tuning,
+        network_camera=settings.network_camera,
     )
 
     try:
@@ -55,6 +63,7 @@ def startup() -> None:
         LOGGER.exception("Failed to start camera manager: %s", exc)
 
     app.state.calibration_store = calibration_store
+    app.state.calibration_runner_service = calibration_runner
     app.state.camera_manager = camera_manager
     app.state.triangulation_service = TriangulationService(camera_manager, calibration_store)
     app.state.volumetric_capture_service = VolumetricCaptureService(
@@ -62,16 +71,49 @@ def startup() -> None:
         calibration_store,
         output_dir=settings.volumetric_capture_output_dir,
     )
+    app.state._startup_complete = True
+
+
+def _shutdown_app() -> None:
+    if not getattr(app.state, "_startup_complete", False):
+        return
+
+    calibration_runner = getattr(app.state, "calibration_runner_service", None)
+    if calibration_runner is not None:
+        try:
+            calibration_runner.shutdown()
+        except Exception:
+            LOGGER.exception("Failed to stop calibration runner cleanly")
+
+    manager = getattr(app.state, "camera_manager", None)
+    if manager is not None:
+        try:
+            manager.stop()
+        except Exception:
+            LOGGER.exception("Failed to stop camera manager cleanly")
+    app.state._startup_complete = False
+
+
+@app.on_event("startup")
+def startup() -> None:
+    _startup_app()
 
 
 @app.on_event("shutdown")
 def shutdown() -> None:
-    manager = getattr(app.state, "camera_manager", None)
-    if manager is not None:
-        manager.stop()
+    _shutdown_app()
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host=settings.host, port=settings.port, reload=False)
+    try:
+        uvicorn.run(
+            "app.main:app",
+            host=settings.host,
+            port=settings.port,
+            reload=False,
+            timeout_graceful_shutdown=2,
+        )
+    except KeyboardInterrupt:
+        LOGGER.info("Controller backend stopped")

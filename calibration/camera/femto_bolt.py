@@ -76,6 +76,10 @@ class FemtoBoltCamera(CameraDevice):
     def device_name(self) -> str:
         return self._device_name
 
+    @property
+    def connection_type(self) -> str:
+        return "usb"
+
     def start(self) -> None:
         if self._started:
             return
@@ -304,7 +308,7 @@ class FemtoBoltCamera(CameraDevice):
         frame = CameraFrame(
             camera_id=self._camera_id,
             frame_index=self._frame_index,
-            timestamp_ns=time.time_ns(),
+            timestamp_ns=self._extract_frame_timestamp_ns(frames, color_frame, depth_frame),
             color=color,
             depth=depth,
             depth_scale_m=depth_scale_m,
@@ -312,6 +316,43 @@ class FemtoBoltCamera(CameraDevice):
         )
         self._frame_index += 1
         return frame
+
+    @staticmethod
+    def _extract_frame_timestamp_ns(frames: Any, color_frame: Any, depth_frame: Any) -> int:
+        """Best-effort device timestamp extraction with portable SDK fallbacks."""
+        candidates = [color_frame, depth_frame, frames]
+        method_names = (
+            "get_timestamp_ns",
+            "get_timestamp",
+            "get_time_stamp_ns",
+            "get_time_stamp",
+            "get_system_time_stamp",
+            "get_system_timestamp",
+        )
+
+        for obj in candidates:
+            if obj is None:
+                continue
+            for method_name in method_names:
+                method = getattr(obj, method_name, None)
+                if method is None or not callable(method):
+                    continue
+                try:
+                    raw = float(method())
+                except Exception:
+                    continue
+                if not np.isfinite(raw) or raw <= 0.0:
+                    continue
+                # Heuristic unit detection: timestamps in seconds/ms/us/ns all mapped to ns.
+                if raw < 1e11:
+                    return int(raw * 1e9)  # likely seconds
+                if raw < 1e14:
+                    return int(raw * 1e6)  # likely milliseconds
+                if raw < 1e17:
+                    return int(raw * 1e3)  # likely microseconds
+                return int(raw)  # already nanoseconds (or close enough)
+
+        return time.time_ns()
 
     @staticmethod
     def _extract_depth_scale_m(depth_frame: Any) -> Optional[float]:
@@ -325,7 +366,8 @@ class FemtoBoltCamera(CameraDevice):
 
         if not np.isfinite(scale) or scale <= 0.0:
             return None
-        return scale
+        # Orbbec depth scale is reported in millimeters-per-raw-unit.
+        return scale * 1e-3
 
     def _select_color_profile(self, profiles: Any) -> Any:
         width, height = self._color_resolution
@@ -573,7 +615,8 @@ class FemtoBoltCamera(CameraDevice):
 
         try:
             rotation = np.asarray(getattr(transform_struct, "rot"), dtype=np.float64).reshape(3, 3)
-            translation = np.asarray(getattr(transform_struct, "transform"), dtype=np.float64).reshape(3)
+            translation_raw = getattr(transform_struct, "trans", getattr(transform_struct, "transform", None))
+            translation = np.asarray(translation_raw, dtype=np.float64).reshape(3)
         except Exception:
             return None
 

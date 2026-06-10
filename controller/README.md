@@ -8,7 +8,7 @@ This controller includes:
 ## Architecture
 
 - Backend: `controller/backend`
-  - Discover + start connected Femto Bolt cameras via existing `calibration.camera.femto_bolt`.
+  - Discover + start network API cameras only (LAN and localhost loopback).
   - Stream MJPEG preview for each camera.
   - Load calibration from `calib_out/final_calibration.json`.
   - Triangulate world-space point from multi-camera 2D observations.
@@ -38,6 +38,7 @@ Backend defaults:
 Optional env vars:
 
 - `CALIBRATION_FILE`
+- `CALIBRATION_CONFIG_FILE`
 - `CORS_ALLOWED_ORIGINS` (comma separated)
 - `CAMERA_COLOR_WIDTH`
 - `CAMERA_COLOR_HEIGHT`
@@ -52,6 +53,13 @@ Optional env vars:
 - `CAMERA_COLOR_BRIGHTNESS`
 - `VOLUMETRIC_CAPTURE_OUTPUT_DIR`
 - `CAPTURE_OUTPUT_URL_PREFIX`
+- `NETWORK_CAMERA_ENABLED`
+- `NETWORK_CAMERA_SUBNET`
+- `NETWORK_CAMERA_IPS` (comma separated explicit hosts/IPs; default includes `127.0.0.1,localhost`)
+- `NETWORK_CAMERA_PORTS` (comma separated, default `8080`)
+- `NETWORK_CAMERA_TIMEOUT_MS`
+- `NETWORK_CAMERA_MAX_CAMERAS`
+- `NETWORK_CAMERA_MAX_WORKERS`
 
 ## Frontend Run
 
@@ -70,8 +78,10 @@ Open: `http://localhost:3000`
 
 - `GET /api/health`
 - `GET /api/cameras`
+- `GET /api/calibration/status`
 - `GET /api/frame/{camera_id}.jpg`
 - `GET /api/stream/{camera_id}.mjpg`
+- `POST /api/calibration/run`
 - `POST /api/volumetric-point`
 - `POST /api/volumetric-capture`
 

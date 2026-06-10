@@ -31,8 +31,8 @@ class VolumetricCaptureService:
         output_dir: Path,
         depth_scale_m: float = 0.001,
         depth_min_m: float = 0.2,
-        depth_max_m: float = 5.0,
-        pixel_step: int = 4,
+        depth_max_m: float = 2.0,
+        pixel_step: int = 1,
     ) -> None:
         self._camera_manager = camera_manager
         self._calibration_store = calibration_store
@@ -52,6 +52,12 @@ class VolumetricCaptureService:
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
         selected_camera_ids = camera_ids or self._camera_manager.camera_ids()
+        synchronized_frames = self._camera_manager.synchronized_raw_snapshots(
+            selected_camera_ids,
+            require_depth=True,
+            max_skew_ms=75.0,
+            timeout_ms=1200,
+        )
         pixel_step_value = max(1, int(pixel_step if pixel_step is not None else self._pixel_step))
         depth_min_value = float(self._depth_min_m if depth_min_m is None else depth_min_m)
         depth_max_value = float(self._depth_max_m if depth_max_m is None else depth_max_m)
@@ -70,6 +76,7 @@ class VolumetricCaptureService:
         for camera_id in selected_camera_ids:
             world_points, colors, skip_reason = self._capture_world_points_for_camera(
                 camera_id,
+                frame=synchronized_frames.get(camera_id),
                 pixel_step=pixel_step_value,
                 depth_min_m=depth_min_value,
                 depth_max_m=depth_max_value,
@@ -88,8 +95,10 @@ class VolumetricCaptureService:
         if not all_points_world:
             raise ValueError(self._build_empty_capture_message(selected_camera_ids, stats))
 
+        all_colors = self._balance_camera_brightness(all_colors)
         stacked_points = np.vstack(all_points_world)
         stacked_colors = np.vstack(all_colors)
+        stacked_points, stacked_colors = self._voxel_fuse(stacked_points, stacked_colors, voxel_size_m=0.0075)
 
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         ply_path = self._output_dir / f"volumetric_capture_{timestamp}.ply"
@@ -113,6 +122,7 @@ class VolumetricCaptureService:
         self,
         camera_id: str,
         *,
+        frame: RawFrameSnapshot | None,
         pixel_step: int,
         depth_min_m: float,
         depth_max_m: float,
@@ -123,14 +133,10 @@ class VolumetricCaptureService:
             stats["no_calibration"] += 1
             return None, None, f"{camera_id}: missing calibration entry"
 
-        frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
         if frame is None:
-            frame = self._camera_manager.capture_raw_frame(
-                camera_id,
-                require_depth=True,
-                timeout_ms=600,
-                max_attempts=12,
-            )
+            frame = self._camera_manager.get_latest_raw_snapshot(camera_id, require_depth=True)
+        if frame is None:
+            frame = self._camera_manager.capture_raw_frame(camera_id, require_depth=True, timeout_ms=600, max_attempts=12)
         if frame is None or frame.depth is None:
             stats["no_depth_frame"] += 1
             return None, None, f"{camera_id}: depth frame unavailable"
@@ -154,8 +160,23 @@ class VolumetricCaptureService:
             stats["no_points_after_filter"] += 1
             return None, None, f"{camera_id}: no valid points after depth filter"
 
-        color_camera_points = self._depth_camera_to_color_camera(depth_points, depth_to_color)
-        colors = self._sample_colors_from_projection(frame, color_camera_points, color_intrinsics)
+        color_camera_points = self._map_depth_points_to_color_camera(
+            depth_points,
+            depth_to_color,
+            frame=frame,
+            intrinsics=color_intrinsics,
+        )
+        colors, color_valid = self._sample_colors_from_projection(frame, color_camera_points, color_intrinsics)
+        if color_valid.shape[0] == color_camera_points.shape[0]:
+            if not np.any(color_valid):
+                stats["no_points_after_filter"] += 1
+                return None, None, f"{camera_id}: no valid projected color samples"
+            color_camera_points = color_camera_points[color_valid]
+            colors = colors[color_valid]
+            if color_camera_points.size == 0:
+                stats["no_points_after_filter"] += 1
+                return None, None, f"{camera_id}: no valid projected color samples"
+        
         world_points = self._camera_to_world(color_camera_points, extrinsics.t_camera_world)
         return world_points, colors, None
 
@@ -186,10 +207,15 @@ class VolumetricCaptureService:
         depth_height, depth_width = frame.depth.shape[:2]
         k = np.asarray(intrinsics, dtype=np.float64).copy()
 
-        current_width = float(max(1.0, 2.0 * k[0, 2]))
-        current_height = float(max(1.0, 2.0 * k[1, 2]))
-        scale_x = float(depth_width) / current_width
-        scale_y = float(depth_height) / current_height
+        # Prefer actual frame dimensions when available; principal-point based scaling is only a fallback.
+        if color_width is not None and color_height is not None and color_width > 0 and color_height > 0:
+            scale_x = float(depth_width) / float(color_width)
+            scale_y = float(depth_height) / float(color_height)
+        else:
+            current_width = float(max(1.0, 2.0 * k[0, 2]))
+            current_height = float(max(1.0, 2.0 * k[1, 2]))
+            scale_x = float(depth_width) / current_width
+            scale_y = float(depth_height) / current_height
 
         k[0, 0] *= scale_x
         k[1, 1] *= scale_y
@@ -246,18 +272,24 @@ class VolumetricCaptureService:
         frame: RawFrameSnapshot,
         color_camera_points: np.ndarray,
         intrinsics: np.ndarray | None,
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         point_count = int(color_camera_points.shape[0])
         if point_count <= 0:
-            return np.empty((0, 3), dtype=np.uint8)
+            return np.empty((0, 3), dtype=np.uint8), np.empty((0,), dtype=bool)
         if frame.color is None:
-            return np.full((point_count, 3), 180, dtype=np.uint8)
+            return np.full((point_count, 3), 180, dtype=np.uint8), np.ones((point_count,), dtype=bool)
         if intrinsics is None:
-            return np.full((point_count, 3), 180, dtype=np.uint8)
+            return np.full((point_count, 3), 180, dtype=np.uint8), np.ones((point_count,), dtype=bool)
 
         color = frame.color
         if color.ndim != 3 or color.shape[2] != 3:
-            return np.full((point_count, 3), 180, dtype=np.uint8)
+            return np.full((point_count, 3), 180, dtype=np.uint8), np.ones((point_count,), dtype=bool)
+
+        intrinsics = self._rescale_intrinsics_to_frame(
+            np.asarray(intrinsics, dtype=np.float64),
+            target_width=int(color.shape[1]),
+            target_height=int(color.shape[0]),
+        )
 
         fx = float(intrinsics[0, 0])
         fy = float(intrinsics[1, 1])
@@ -269,9 +301,10 @@ class VolumetricCaptureService:
         z = color_camera_points[:, 2]
 
         colors = np.full((point_count, 3), 180, dtype=np.uint8)
+        valid_mask = np.zeros((point_count,), dtype=bool)
         valid_z = z > 1e-6
         if not np.any(valid_z):
-            return colors
+            return colors, valid_mask
 
         u = np.round((x[valid_z] * fx / z[valid_z]) + cx).astype(np.int32)
         v = np.round((y[valid_z] * fy / z[valid_z]) + cy).astype(np.int32)
@@ -281,11 +314,84 @@ class VolumetricCaptureService:
             valid_indices = np.nonzero(valid_z)[0]
             point_indices = valid_indices[in_bounds]
             colors[point_indices] = color[v[in_bounds], u[in_bounds]].astype(np.uint8)
+            valid_mask[point_indices] = True
 
-        return colors
+        return colors, valid_mask
 
     @staticmethod
-    def _depth_camera_to_color_camera(depth_points: np.ndarray, depth_to_color: np.ndarray | None) -> np.ndarray:
+    def _balance_camera_brightness(color_batches: list[np.ndarray]) -> list[np.ndarray]:
+        if len(color_batches) <= 1:
+            return color_batches
+
+        luminance_means: list[float] = []
+        for colors in color_batches:
+            if colors.size == 0:
+                luminance_means.append(0.0)
+                continue
+            b = colors[:, 0].astype(np.float32)
+            g = colors[:, 1].astype(np.float32)
+            r = colors[:, 2].astype(np.float32)
+            luminance = (0.114 * b) + (0.587 * g) + (0.299 * r)
+            luminance_means.append(float(np.mean(luminance)))
+
+        valid_means = [value for value in luminance_means if value > 1.0]
+        if len(valid_means) <= 1:
+            return color_batches
+
+        target_luminance = float(np.median(np.asarray(valid_means, dtype=np.float32)))
+        balanced: list[np.ndarray] = []
+        for colors, current_luminance in zip(color_batches, luminance_means, strict=False):
+            if colors.size == 0 or current_luminance <= 1.0:
+                balanced.append(colors)
+                continue
+
+            gain = target_luminance / current_luminance
+            gain = float(np.clip(gain, 0.70, 1.30))
+            if abs(gain - 1.0) < 0.03:
+                balanced.append(colors)
+                continue
+
+            corrected = np.clip(colors.astype(np.float32) * gain, 0.0, 255.0).astype(np.uint8)
+            balanced.append(corrected)
+        return balanced
+
+    @staticmethod
+    def _voxel_fuse(points: np.ndarray, colors: np.ndarray, voxel_size_m: float) -> tuple[np.ndarray, np.ndarray]:
+        if points.size == 0 or colors.size == 0:
+            return points, colors
+
+        voxel_size = float(max(1e-4, voxel_size_m))
+        voxel_indices = np.floor(points / voxel_size).astype(np.int64)
+        _, inverse = np.unique(voxel_indices, axis=0, return_inverse=True)
+        if inverse.size == 0:
+            return points, colors
+
+        voxel_count = int(inverse.max()) + 1
+        points_sum = np.zeros((voxel_count, 3), dtype=np.float64)
+        colors_sum = np.zeros((voxel_count, 3), dtype=np.float64)
+        counts = np.zeros((voxel_count,), dtype=np.int32)
+
+        np.add.at(points_sum, inverse, points)
+        np.add.at(colors_sum, inverse, colors.astype(np.float64))
+        np.add.at(counts, inverse, 1)
+
+        valid_voxels = counts > 0
+        fused_points = points_sum[valid_voxels] / counts[valid_voxels, None]
+        fused_colors = np.clip(
+            np.rint(colors_sum[valid_voxels] / counts[valid_voxels, None]),
+            0.0,
+            255.0,
+        ).astype(np.uint8)
+        return fused_points, fused_colors
+
+    def _map_depth_points_to_color_camera(
+        self,
+        depth_points: np.ndarray,
+        depth_to_color: np.ndarray | None,
+        *,
+        frame: RawFrameSnapshot,
+        intrinsics: np.ndarray | None,
+    ) -> np.ndarray:
         if depth_to_color is None:
             return depth_points
 
@@ -293,9 +399,93 @@ class VolumetricCaptureService:
         if transform.shape != (4, 4):
             return depth_points
 
+        forward_candidate = self._apply_transform(depth_points, transform)
+        candidates: list[tuple[str, np.ndarray]] = [
+            ("forward", forward_candidate),
+            ("identity", depth_points),
+        ]
+
+        if intrinsics is None or frame.color is None:
+            return forward_candidate
+
+        color_h, color_w = frame.color.shape[:2]
+        intrinsics_scaled = self._rescale_intrinsics_to_frame(
+            np.asarray(intrinsics, dtype=np.float64),
+            target_width=int(color_w),
+            target_height=int(color_h),
+        )
+
+        try:
+            inverse_candidate = self._apply_transform(depth_points, np.linalg.inv(transform))
+        except np.linalg.LinAlgError:
+            inverse_candidate = None
+        if inverse_candidate is not None:
+            candidates.append(("inverse", inverse_candidate))
+
+        # Prefer candidates that project more points inside the color frame.
+        scored: list[tuple[str, float, np.ndarray]] = []
+        for name, candidate in candidates:
+            score = self._projection_score(frame.color, candidate, intrinsics_scaled)
+            scored.append((name, score, candidate))
+
+        preference = {"forward": 0, "identity": 1, "inverse": 2}
+        scored.sort(key=lambda item: (-item[1], preference.get(item[0], 99)))
+        return scored[0][2]
+
+    @staticmethod
+    def _apply_transform(points: np.ndarray, transform: np.ndarray) -> np.ndarray:
         rotation = transform[:3, :3]
         translation = transform[:3, 3]
-        return (depth_points @ rotation.T) + translation
+        return (points @ rotation.T) + translation
+
+    @staticmethod
+    def _projection_score(color: np.ndarray, color_camera_points: np.ndarray, intrinsics: np.ndarray) -> float:
+        if color.ndim != 3 or color.shape[2] != 3 or color_camera_points.size == 0:
+            return -1.0
+
+        z = color_camera_points[:, 2]
+        valid_z = z > 1e-6
+        if not np.any(valid_z):
+            return 0.0
+
+        fx = float(intrinsics[0, 0])
+        fy = float(intrinsics[1, 1])
+        cx = float(intrinsics[0, 2])
+        cy = float(intrinsics[1, 2])
+
+        x = color_camera_points[valid_z, 0]
+        y = color_camera_points[valid_z, 1]
+        z_valid = z[valid_z]
+        u = (x * fx / z_valid) + cx
+        v = (y * fy / z_valid) + cy
+
+        in_bounds = (u >= 0.0) & (u < float(color.shape[1])) & (v >= 0.0) & (v < float(color.shape[0]))
+        return float(np.count_nonzero(in_bounds)) / float(color_camera_points.shape[0])
+
+    @staticmethod
+    def _rescale_intrinsics_to_frame(intrinsics: np.ndarray, target_width: int, target_height: int) -> np.ndarray:
+        k = np.asarray(intrinsics, dtype=np.float64).copy()
+        if k.shape != (3, 3):
+            return k
+
+        width = max(1.0, float(target_width))
+        height = max(1.0, float(target_height))
+        cx = float(k[0, 2])
+        cy = float(k[1, 2])
+        approx_width = max(1.0, 2.0 * cx)
+        approx_height = max(1.0, 2.0 * cy)
+        scale_x = width / approx_width
+        scale_y = height / approx_height
+
+        # Skip tiny corrections to avoid unnecessary per-frame numeric jitter.
+        if abs(scale_x - 1.0) < 0.02 and abs(scale_y - 1.0) < 0.02:
+            return k
+
+        k[0, 0] *= scale_x
+        k[1, 1] *= scale_y
+        k[0, 2] *= scale_x
+        k[1, 2] *= scale_y
+        return k
 
     @staticmethod
     def _camera_to_world(camera_points: np.ndarray, t_camera_world: np.ndarray) -> np.ndarray:

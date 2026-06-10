@@ -1,5 +1,6 @@
 #include "streaming/PreviewPublisher.hpp"
 
+#include "util/ImageIO.hpp"
 #include "util/Log.hpp"
 
 #include <algorithm>
@@ -30,11 +31,14 @@ struct PreviewPublisher::Impl {
     bool started = false;
     std::chrono::steady_clock::time_point nextFrameAt {};
     std::chrono::steady_clock::time_point lastDropLogAt {};
+    uint64_t nextFrameTimestampUs = 0;
+    uint64_t lastFrameTimestampUs = 0;
     std::mutex pushMutex;
     uint64_t droppedRateLimit = 0;
     uint64_t droppedBusy = 0;
     uint64_t droppedInvalidSize = 0;
     uint64_t droppedEncode = 0;
+    bool softwareFallback = false;
 };
 
 PreviewPublisher::PreviewPublisher(std::string name) : impl_(std::make_unique<Impl>()), name_(std::move(name)) {}
@@ -51,27 +55,53 @@ bool PreviewPublisher::start(int width, int height, int fps, int quality) {
     impl_->quality = quality;
 #if !NUC_HAS_GSTREAMER
     (void)quality;
-    log::get()->warn("event=preview state=disabled stream={} reason=no_gstreamer_build", name_);
-    return false;
+    impl_->softwareFallback = true;
+    impl_->started = true;
+    impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
+    impl_->lastDropLogAt = std::chrono::steady_clock::now();
+    impl_->nextFrameTimestampUs = 0;
+    impl_->lastFrameTimestampUs = 0;
+    log::get()->warn("event=preview state=started stream={} mode=software_jpeg reason=no_gstreamer_build", name_);
+    return true;
 #else
     static std::once_flag gstOnce;
     std::call_once(gstOnce, [] {
         gst_init(nullptr, nullptr);
     });
 
+    const auto startSoftwareFallback = [this, width, height, fps](const char *reason) {
+        impl_->softwareFallback = true;
+        impl_->started = true;
+        impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
+        impl_->lastDropLogAt = std::chrono::steady_clock::now();
+        impl_->nextFrameTimestampUs = 0;
+        impl_->lastFrameTimestampUs = 0;
+        log::get()->warn(
+            "event=preview state=started stream={} mode=software_jpeg reason={}",
+            name_,
+            reason);
+        log::get()->info(
+            "event=preview state=started stream={} width={} height={} fps={} queue_max_buffers=0 transport=jpeg-websocket",
+            name_,
+            width,
+            height,
+            fps);
+        return true;
+    };
+
     if(auto *factory = gst_element_factory_find("jpegenc")) {
         gst_object_unref(factory);
     }
     else {
         log::get()->error("event=preview state=start_failed stream={} reason=missing_plugin plugin=jpegenc hint=GST_PLUGIN_PATH", name_);
-        return false;
+        return startSoftwareFallback("missing_plugin_jpegenc");
     }
     if(auto *factory = gst_element_factory_find("videoconvert")) {
         gst_object_unref(factory);
     }
     else {
         log::get()->error("event=preview state=start_failed stream={} reason=missing_plugin plugin=videoconvert hint=GST_PLUGIN_PATH", name_);
-        return false;
+        return startSoftwareFallback("missing_plugin_videoconvert");
     }
 
     const std::string pipelineText =
@@ -88,24 +118,27 @@ bool PreviewPublisher::start(int width, int height, int fps, int quality) {
         if(error) {
             g_error_free(error);
         }
-        return false;
+        return startSoftwareFallback("pipeline_create_failed");
     }
     impl_->appsrc = gst_bin_get_by_name(GST_BIN(impl_->pipeline), "src");
     impl_->appsink = gst_bin_get_by_name(GST_BIN(impl_->pipeline), "sink");
     if(!impl_->appsrc || !impl_->appsink) {
         log::get()->error("event=preview state=start_failed stream={} reason=missing_appsrc_or_sink", name_);
         stop();
-        return false;
+        return startSoftwareFallback("missing_appsrc_or_sink");
     }
     const auto stateChange = gst_element_set_state(impl_->pipeline, GST_STATE_PLAYING);
     if(stateChange == GST_STATE_CHANGE_FAILURE) {
         log::get()->error("event=preview state=start_failed stream={} reason=state_change_failure", name_);
         stop();
-        return false;
+        return startSoftwareFallback("state_change_failure");
     }
     impl_->started = true;
+    impl_->softwareFallback = false;
     impl_->nextFrameAt = std::chrono::steady_clock::time_point {};
     impl_->lastDropLogAt = std::chrono::steady_clock::now();
+    impl_->nextFrameTimestampUs = 0;
+    impl_->lastFrameTimestampUs = 0;
     log::get()->info("event=preview state=started stream={} width={} height={} fps={} queue_max_buffers=2 transport=jpeg-websocket", name_, width, height,
                      fps);
     return true;
@@ -136,6 +169,7 @@ void PreviewPublisher::stop() {
     }
 #endif
     impl_->started = false;
+    impl_->softwareFallback = false;
     if(shouldLog) {
         log::get()->info("event=preview state=stopped stream={}", name_);
     }
@@ -166,17 +200,72 @@ bool PreviewPublisher::pushRgbFrame(const uint8_t *data, std::size_t bytes, uint
         return false;
     }
     const auto now = std::chrono::steady_clock::now();
-    const auto interval = std::chrono::microseconds(1'000'000 / std::max(1, impl_->fps));
-    if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
-        ++impl_->droppedRateLimit;
-        logDropSummary("rate_limit");
-        return false;
+    const auto intervalUs = static_cast<uint64_t>(1'000'000 / std::max(1, impl_->fps));
+    const auto interval = std::chrono::microseconds(intervalUs);
+    constexpr uint64_t kTimestampToleranceUs = 2000;
+
+    // Prefer sensor timestamps for frame pacing because steady_clock granularity on Windows
+    // can be coarse enough to cause false positives and halve the effective preview FPS.
+    bool usedTimestampRateLimit = false;
+    if(timestampUs > 0) {
+        if(impl_->lastFrameTimestampUs > 0 && timestampUs + intervalUs < impl_->lastFrameTimestampUs) {
+            impl_->nextFrameTimestampUs = 0;
+        }
+        if(impl_->nextFrameTimestampUs > 0 && timestampUs + kTimestampToleranceUs < impl_->nextFrameTimestampUs) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
+        usedTimestampRateLimit = true;
+    }
+    if(!usedTimestampRateLimit) {
+        if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
     }
     std::unique_lock pushLock(impl_->pushMutex, std::try_to_lock);
     if(!pushLock.owns_lock()) {
         ++impl_->droppedBusy;
         logDropSummary("busy");
         return false;
+    }
+    if(impl_->softwareFallback) {
+        const auto started = std::chrono::steady_clock::now();
+        auto bytesOut = imageio::encodeRgbJpeg(data, impl_->width, impl_->height, impl_->quality);
+        if(!bytesOut || bytesOut->empty()) {
+            ++impl_->droppedEncode;
+            logDropSummary("software_encode");
+            return false;
+        }
+
+        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        FrameCallback callback;
+        {
+            std::scoped_lock lock(mutex_);
+            latestJpeg_ = bytesOut;
+            callback = callback_;
+        }
+        if(usedTimestampRateLimit) {
+            if(impl_->nextFrameTimestampUs == 0 || timestampUs > impl_->nextFrameTimestampUs + intervalUs * 4) {
+                impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+            }
+            else {
+                impl_->nextFrameTimestampUs += intervalUs;
+                if(impl_->nextFrameTimestampUs <= timestampUs) {
+                    impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+                }
+            }
+            impl_->lastFrameTimestampUs = timestampUs;
+        }
+        else {
+            impl_->nextFrameAt = now + interval;
+        }
+        if(callback) {
+            callback(bytesOut, timestampUs, elapsedMs);
+        }
+        return true;
     }
 #if !NUC_HAS_GSTREAMER
     (void)data;
@@ -232,12 +321,98 @@ bool PreviewPublisher::pushRgbFrame(const uint8_t *data, std::size_t bytes, uint
         latestJpeg_ = bytesOut;
         callback = callback_;
     }
-    impl_->nextFrameAt = now + interval;
+    if(usedTimestampRateLimit) {
+        if(impl_->nextFrameTimestampUs == 0 || timestampUs > impl_->nextFrameTimestampUs + intervalUs * 4) {
+            impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+        }
+        else {
+            impl_->nextFrameTimestampUs += intervalUs;
+            if(impl_->nextFrameTimestampUs <= timestampUs) {
+                impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+            }
+        }
+        impl_->lastFrameTimestampUs = timestampUs;
+    }
+    else {
+        impl_->nextFrameAt = now + interval;
+    }
     if(callback) {
         callback(bytesOut, timestampUs, elapsedMs);
     }
     return true;
 #endif
+}
+
+bool PreviewPublisher::pushJpegFrame(std::shared_ptr<const std::vector<uint8_t>> jpeg, uint64_t timestampUs) {
+    const auto logDropSummary = [this](const char *reason) {
+        const auto now = std::chrono::steady_clock::now();
+        if(impl_->lastDropLogAt.time_since_epoch().count() == 0 || now - impl_->lastDropLogAt >= std::chrono::seconds(5)) {
+            log::get()->warn(
+                "event=preview_drop stream={} reason={} rate_limit={} busy={} invalid_size={} encode={}", name_, reason, impl_->droppedRateLimit,
+                impl_->droppedBusy, impl_->droppedInvalidSize, impl_->droppedEncode);
+            impl_->lastDropLogAt = now;
+        }
+    };
+
+    if(!impl_->started || !jpeg || jpeg->empty()) {
+        return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto intervalUs = static_cast<uint64_t>(1'000'000 / std::max(1, impl_->fps));
+    const auto interval = std::chrono::microseconds(intervalUs);
+    constexpr uint64_t kTimestampToleranceUs = 2000;
+
+    bool usedTimestampRateLimit = false;
+    if(timestampUs > 0) {
+        if(impl_->lastFrameTimestampUs > 0 && timestampUs + intervalUs < impl_->lastFrameTimestampUs) {
+            impl_->nextFrameTimestampUs = 0;
+        }
+        if(impl_->nextFrameTimestampUs > 0 && timestampUs + kTimestampToleranceUs < impl_->nextFrameTimestampUs) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
+        usedTimestampRateLimit = true;
+    }
+    if(!usedTimestampRateLimit) {
+        if(impl_->nextFrameAt.time_since_epoch().count() != 0 && now < impl_->nextFrameAt) {
+            ++impl_->droppedRateLimit;
+            logDropSummary("rate_limit");
+            return false;
+        }
+    }
+    std::unique_lock pushLock(impl_->pushMutex, std::try_to_lock);
+    if(!pushLock.owns_lock()) {
+        ++impl_->droppedBusy;
+        logDropSummary("busy");
+        return false;
+    }
+
+    FrameCallback callback;
+    {
+        std::scoped_lock lock(mutex_);
+        latestJpeg_ = jpeg;
+        callback = callback_;
+    }
+    if(usedTimestampRateLimit) {
+        if(impl_->nextFrameTimestampUs == 0 || timestampUs > impl_->nextFrameTimestampUs + intervalUs * 4) {
+            impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+        }
+        else {
+            impl_->nextFrameTimestampUs += intervalUs;
+            if(impl_->nextFrameTimestampUs <= timestampUs) {
+                impl_->nextFrameTimestampUs = timestampUs + intervalUs;
+            }
+        }
+        impl_->lastFrameTimestampUs = timestampUs;
+    }
+    else {
+        impl_->nextFrameAt = now + interval;
+    }
+    if(callback) {
+        callback(std::move(jpeg), timestampUs, 0.0);
+    }
+    return true;
 }
 
 std::shared_ptr<const std::vector<uint8_t>> PreviewPublisher::latestJpeg() const {

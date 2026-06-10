@@ -4,6 +4,7 @@ from fastapi import HTTPException, Request
 
 from app.services.calibration_store import CalibrationStore
 from app.services.camera_stream_manager import CameraStreamManager
+from app.services.calibration_runner import CalibrationRunnerService
 from app.services.triangulation import TriangulationService
 from app.services.volumetric_capture import VolumetricCaptureService
 
@@ -33,4 +34,11 @@ def get_volumetric_capture_service(request: Request) -> VolumetricCaptureService
     service = getattr(request.app.state, "volumetric_capture_service", None)
     if service is None:
         raise HTTPException(status_code=503, detail="Volumetric capture service is not available")
+    return service
+
+
+def get_calibration_runner_service(request: Request) -> CalibrationRunnerService:
+    service = getattr(request.app.state, "calibration_runner_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Calibration runner service is not available")
     return service
