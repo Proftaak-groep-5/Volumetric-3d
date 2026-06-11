@@ -410,12 +410,3 @@ What is still intentionally not in scope here:
 - production installer/packager
 - multi-camera orchestration
 
-Known limitations:
-
-- I could not execute a full compile from this shell because no MSVC/Ninja toolchain is exposed here, even though `cmake` is installed.
-- I did not find a local GStreamer install root from this shell environment, so the improved error path for missing GStreamer is code-level, not runtime-verified here.
-- Browser preview is intentionally still JPEG-over-WebSocket for this phase.
-
-Implementation note:
-
-- color capture now accepts uncompressed RGB/BGR/BGRA/RGBA/YUYV/YUY2 and MJPEG camera frames
