@@ -113,6 +113,16 @@ install_python_313_from_source() {
   fi
 }
 
+bootstrap_pip() {
+  local python_bin="$1"
+  if "$python_bin" -m pip --version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[install] bootstrapping pip with ensurepip"
+  "$python_bin" -m ensurepip --upgrade || "$python_bin" -m ensurepip --default-pip --upgrade
+}
+
 section "Python 3.13 (source build)"
 python_cmd=""
 if command -v python3.13 >/dev/null 2>&1; then
@@ -135,6 +145,7 @@ if [[ ! -x "$venv_path/bin/python" ]]; then
   "$python_cmd" -m venv "$venv_path"
 fi
 
+bootstrap_pip "$venv_path/bin/python"
 "$venv_path/bin/python" -m pip install --upgrade pip
 "$venv_path/bin/python" -m pip install -r "$repo_root/calibration/requirements.txt" -r "$repo_root/controller/backend/requirements.txt"
 
