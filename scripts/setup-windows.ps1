@@ -28,31 +28,148 @@ function Install-Package {
         [string]$ScoopId
     )
 
+    $attempted = $false
+
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         if ($WingetId) {
+            $attempted = $true
             Write-Host "[install] winget $WingetId" -ForegroundColor Yellow
-            & winget install --id $WingetId -e --silent --accept-package-agreements --accept-source-agreements
-            return
+            try {
+                & winget install --id $WingetId -e --source winget --silent --accept-package-agreements --accept-source-agreements
+                if ($LASTEXITCODE -eq 0) { return $true }
+                Write-Host "[warn] winget failed with exit code $LASTEXITCODE; trying another package manager if available." -ForegroundColor Yellow
+            } catch {
+                Write-Host "[warn] winget failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "       Trying another package manager if available." -ForegroundColor Yellow
+            }
         }
     }
 
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         if ($ChocoId) {
+            $attempted = $true
             Write-Host "[install] choco $ChocoId" -ForegroundColor Yellow
-            & choco install $ChocoId -y
-            return
+            try {
+                & choco install $ChocoId -y
+                if ($LASTEXITCODE -eq 0) { return $true }
+                Write-Host "[warn] choco failed with exit code $LASTEXITCODE; trying another package manager if available." -ForegroundColor Yellow
+            } catch {
+                Write-Host "[warn] choco failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "       Trying another package manager if available." -ForegroundColor Yellow
+            }
         }
     }
 
     if (Get-Command scoop -ErrorAction SilentlyContinue) {
         if ($ScoopId) {
+            $attempted = $true
             Write-Host "[install] scoop $ScoopId" -ForegroundColor Yellow
-            & scoop install $ScoopId
-            return
+            try {
+                & scoop install $ScoopId
+                if ($LASTEXITCODE -eq 0) { return $true }
+                Write-Host "[warn] scoop failed with exit code $LASTEXITCODE." -ForegroundColor Yellow
+            } catch {
+                Write-Host "[warn] scoop failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
         }
     }
 
-    Write-Host "[warn] No supported package manager found (winget/choco/scoop)." -ForegroundColor Yellow
+    if (-not $attempted) {
+        Write-Host "[warn] No supported package manager found (winget/choco/scoop)." -ForegroundColor Yellow
+    }
+    return $false
+}
+
+function Update-SessionPath {
+    $pathValues = @(
+        $env:Path,
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        [Environment]::GetEnvironmentVariable("Path", "User")
+    )
+
+    $seen = @{}
+    $parts = foreach ($pathValue in $pathValues) {
+        if (-not $pathValue) { continue }
+        foreach ($part in $pathValue.Split(";")) {
+            $trimmed = $part.Trim()
+            if (-not $trimmed) { continue }
+            $key = $trimmed.ToLowerInvariant()
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                $trimmed
+            }
+        }
+    }
+
+    $env:Path = ($parts -join ";")
+}
+
+function Test-Python313 {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $cmd = Get-Command $FilePath -ErrorAction SilentlyContinue
+    if (-not $cmd) { return $null }
+
+    try {
+        $version = & $FilePath @Arguments -V 2>$null
+        if ($LASTEXITCODE -eq 0 -and $version -match "^Python 3\.13\.") {
+            Write-Host "[ok] $version" -ForegroundColor Green
+            return [pscustomobject]@{
+                FilePath = $FilePath
+                Arguments = $Arguments
+            }
+        }
+    } catch {
+        # keep looking
+    }
+
+    return $null
+}
+
+function Find-Python313 {
+    $pyLauncher = Get-Command "py" -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        Write-Host "[ok] py -> $($pyLauncher.Source)" -ForegroundColor Green
+        $python = Test-Python313 -FilePath "py" -Arguments @("-3.13")
+        if ($python) { return $python }
+    } else {
+        Write-Host "[missing] py" -ForegroundColor Red
+        Write-Host "  Install Python 3.13 and ensure the py launcher is available."
+    }
+
+    $python313 = Get-Command "python3.13" -ErrorAction SilentlyContinue
+    if ($python313) {
+        Write-Host "[ok] python3.13 -> $($python313.Source)" -ForegroundColor Green
+        $python = Test-Python313 -FilePath "python3.13"
+        if ($python) { return $python }
+    } else {
+        Write-Host "[missing] python3.13" -ForegroundColor Red
+        Write-Host "  Install Python 3.13 and ensure python3.13 is on PATH."
+    }
+
+    $candidates = @()
+    if ($env:LocalAppData) {
+        $candidates += (Join-Path $env:LocalAppData "Programs\Python\Python313\python.exe")
+    }
+    if ($env:ProgramFiles) {
+        $candidates += (Join-Path $env:ProgramFiles "Python313\python.exe")
+    }
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    if ($programFilesX86) {
+        $candidates += (Join-Path $programFilesX86 "Python313\python.exe")
+    }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            $python = Test-Python313 -FilePath $candidate
+            if ($python) { return $python }
+        }
+    }
+
+    return $null
 }
 
 function Parse-NodeMajor {
@@ -65,52 +182,12 @@ function Parse-NodeMajor {
 }
 
 Write-Section "Python 3.13"
-$pythonCmd = $null
-
-if (Require-Command "py" "Install Python 3.13 and ensure the py launcher is available.") {
-    try {
-        $pyVersion = & py -3.13 -V 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "[ok] $pyVersion" -ForegroundColor Green
-            $pythonCmd = "py -3.13"
-        }
-    } catch {
-        # keep looking
-    }
-}
+$pythonCmd = Find-Python313
 
 if (-not $pythonCmd) {
-    if (Require-Command "python3.13" "Install Python 3.13 and ensure python3.13 is on PATH.") {
-        $pyVersion = & python3.13 -V
-        Write-Host "[ok] $pyVersion" -ForegroundColor Green
-        $pythonCmd = "python3.13"
-    }
-}
-
-if (-not $pythonCmd) {
-    Install-Package -WingetId "Python.Python.3.13" -ChocoId "python" -ScoopId "python"
-}
-
-if (-not $pythonCmd) {
-    if (Require-Command "py" "Install Python 3.13 and ensure the py launcher is available.") {
-        try {
-            $pyVersion = & py -3.13 -V 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "[ok] $pyVersion" -ForegroundColor Green
-                $pythonCmd = "py -3.13"
-            }
-        } catch {
-            # keep looking
-        }
-    }
-}
-
-if (-not $pythonCmd) {
-    if (Require-Command "python3.13" "Install Python 3.13 and ensure python3.13 is on PATH.") {
-        $pyVersion = & python3.13 -V
-        Write-Host "[ok] $pyVersion" -ForegroundColor Green
-        $pythonCmd = "python3.13"
-    }
+    [void](Install-Package -WingetId "Python.Python.3.13" -ChocoId "python" -ScoopId "python")
+    Update-SessionPath
+    $pythonCmd = Find-Python313
 }
 
 if (-not $pythonCmd) {
@@ -127,7 +204,8 @@ $venvPython = Join-Path $venvPath "Scripts\python.exe"
 
 if (-not (Test-Path $venvPython)) {
     Write-Host "Creating venv at $venvPath"
-    & $pythonCmd -m venv $venvPath
+    $venvArgs = @($pythonCmd.Arguments) + @("-m", "venv", $venvPath)
+    & $pythonCmd.FilePath @venvArgs
 }
 
 Write-Host "Installing Python deps (calibration + controller backend)"
