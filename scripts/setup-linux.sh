@@ -63,22 +63,80 @@ parse_node_major() {
   echo "${v%%.*}"
 }
 
-section "Python 3.13"
+download_file() {
+  local url="$1"
+  local output="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$output"
+    return 0
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO "$output" "$url"
+    return 0
+  fi
+  echo "[missing] curl or wget"
+  echo "  Install curl or wget to download Python source."
+  return 1
+}
+
+install_python_313_from_source() {
+  local python_version="${PYTHON_VERSION:-3.13.0}"
+  local install_dir="$repo_root/.tooling/python-${python_version}"
+  local python_bin="$install_dir/bin/python3.13"
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  if [[ -x "$python_bin" ]]; then
+    echo "[ok] Python 3.13 already installed at $python_bin"
+    return 0
+  fi
+
+  for tool in tar make cc; do
+    require_cmd "$tool" "Install build tooling for compiling Python from source." || return 1
+  done
+
+  echo "[install] Python ${python_version} from source"
+  trap 'rm -rf "$build_dir"' RETURN
+
+  download_file "https://www.python.org/ftp/python/${python_version}/Python-${python_version}.tgz" "$build_dir/Python-${python_version}.tgz"
+  tar -xzf "$build_dir/Python-${python_version}.tgz" -C "$build_dir"
+
+  pushd "$build_dir/Python-${python_version}" >/dev/null
+  ./configure --prefix="$install_dir" --enable-optimizations --with-ensurepip=install
+  make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+  make altinstall
+  popd >/dev/null
+
+  if [[ ! -x "$python_bin" ]]; then
+    echo "Python 3.13 source build finished, but $python_bin was not created."
+    return 1
+  fi
+}
+
+bootstrap_pip() {
+  local python_bin="$1"
+  if "$python_bin" -m pip --version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[install] bootstrapping pip with ensurepip"
+  "$python_bin" -m ensurepip --upgrade || "$python_bin" -m ensurepip --default-pip --upgrade
+}
+
+section "Python 3.13 (source build)"
 python_cmd=""
-if ! require_cmd python3.13 "Install Python 3.13 and ensure python3.13 is on PATH."; then
-  install_with_pm "python3.13" || true
-  install_with_pm "python3.13-venv" || true
+if command -v python3.13 >/dev/null 2>&1; then
+  python_cmd="$(command -v python3.13)"
+elif install_python_313_from_source; then
+  python_cmd="$repo_root/.tooling/python-${PYTHON_VERSION:-3.13.0}/bin/python3.13"
 fi
 
-if require_cmd python3.13 "Install Python 3.13 and ensure python3.13 is on PATH."; then
-  python_cmd="python3.13"
-  "${python_cmd}" -V
-fi
-
-if [[ -z "$python_cmd" ]]; then
-  echo "Python 3.13 not found. Install Python 3.13 and try again."
+if [[ -z "$python_cmd" || ! -x "$python_cmd" ]]; then
+  echo "Python 3.13 not found and source build failed. Install a compiler toolchain and try again."
   exit 1
 fi
+
+"$python_cmd" -V
 
 section "Python venv + deps"
 venv_path="$repo_root/.venv"
@@ -87,6 +145,7 @@ if [[ ! -x "$venv_path/bin/python" ]]; then
   "$python_cmd" -m venv "$venv_path"
 fi
 
+bootstrap_pip "$venv_path/bin/python"
 "$venv_path/bin/python" -m pip install --upgrade pip
 "$venv_path/bin/python" -m pip install -r "$repo_root/calibration/requirements.txt" -r "$repo_root/controller/backend/requirements.txt"
 
