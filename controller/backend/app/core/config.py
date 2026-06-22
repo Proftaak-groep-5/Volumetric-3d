@@ -32,9 +32,8 @@ class Settings:
     blender_update_command: list[str] | None
     camera_tuning: dict[str, int | bool]
     network_camera: "NetworkCameraDiscoveryConfig"
-    postmark_server_token: str | None
-    postmark_from: str | None
-    postmark_message_stream: str | None
+    gmail_address: str | None
+    gmail_app_password: str | None
 
 
 
@@ -152,7 +151,6 @@ def get_settings() -> Settings:
         blender_update_command=blender_update_command,
         camera_tuning=camera_tuning,
         network_camera=network_camera,
-        postmark_server_token=os.getenv("POSTMARK_SERVER_TOKEN"),
-        postmark_from=os.getenv("POSTMARK_FROM"),
-        postmark_message_stream=os.getenv("POSTMARK_MESSAGE_STREAM", "outbound"),
+        gmail_address=os.getenv("GMAIL_ADDRESS"),
+        gmail_app_password=os.getenv("GMAIL_APP_PASSWORD"),
     )

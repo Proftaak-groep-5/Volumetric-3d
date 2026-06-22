@@ -76,9 +76,8 @@ def _startup_app() -> None:
     app.state.repo_root = settings.repo_root
     app.state.blender_update_command = settings.blender_update_command
     app.state.capture_output_dir = settings.volumetric_capture_output_dir
-    app.state.postmark_server_token = settings.postmark_server_token
-    app.state.postmark_from = settings.postmark_from
-    app.state.postmark_message_stream = settings.postmark_message_stream
+    app.state.gmail_address = settings.gmail_address
+    app.state.gmail_app_password = settings.gmail_app_password
     volumetric_capture_service = VolumetricCaptureService(
         camera_manager,
         calibration_store,
