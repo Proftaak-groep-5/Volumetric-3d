@@ -1392,24 +1392,88 @@ class VolumetricCaptureService:
 
     @staticmethod
     def _write_preview(path: Path, points: np.ndarray, colors: np.ndarray) -> None:
-        width = 900
+        width = 1200
         height = 900
-        padding = 40
-
         canvas = np.full((height, width, 3), 18, dtype=np.uint8)
-        xy = points[:, :2]
 
-        mins = xy.min(axis=0)
-        maxs = xy.max(axis=0)
-        span = np.maximum(maxs - mins, 1e-6)
+        projected = VolumetricCaptureService._project_preview_points(points, width=width, height=height)
+        if projected is None:
+            cv2.imwrite(str(path), canvas)
+            return
 
-        normalized = (xy - mins) / span
-        px = (padding + normalized[:, 0] * (width - 2 * padding)).astype(np.int32)
-        py = (padding + normalized[:, 1] * (height - 2 * padding)).astype(np.int32)
-        py = height - py
+        px, py, depth, point_radius, visible = projected
+        in_frame = (px >= 0) & (px < width) & (py >= 0) & (py < height)
+        if not np.any(in_frame):
+            cv2.imwrite(str(path), canvas)
+            return
 
-        for x_coord, y_coord, color in zip(px, py, colors, strict=False):
-            b, g, r = color
-            cv2.circle(canvas, (int(x_coord), int(y_coord)), 1, (int(b), int(g), int(r)), thickness=-1)
+        px = px[in_frame]
+        py = py[in_frame]
+        depth = depth[in_frame]
+        draw_colors = colors[visible][in_frame]
+        point_radius = point_radius[in_frame]
+
+        depth_span = max(float(np.ptp(depth)), 1e-6)
+        depth_light = 1.0 - ((depth - float(depth.min())) / depth_span)
+        shade = np.clip(0.74 + (depth_light * 0.22), 0.70, 1.04)
+        draw_colors = np.clip(draw_colors.astype(np.float32) * shade[:, None], 0.0, 255.0).astype(np.uint8)
+
+        order = np.argsort(depth)[::-1]
+        for idx in order:
+            x_coord = int(px[idx])
+            y_coord = int(py[idx])
+            radius = int(point_radius[idx])
+            b, g, r = draw_colors[idx]
+            cv2.circle(canvas, (x_coord, y_coord), radius + 1, (10, 10, 10), thickness=-1)
+            cv2.circle(canvas, (x_coord, y_coord), radius, (int(b), int(g), int(r)), thickness=-1)
 
         cv2.imwrite(str(path), canvas)
+
+    @staticmethod
+    def _project_preview_points(
+        points: np.ndarray,
+        *,
+        width: int,
+        height: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+        if points.size == 0:
+            return None
+
+        world_points = np.asarray(points, dtype=np.float64)
+        mins = world_points.min(axis=0)
+        maxs = world_points.max(axis=0)
+        center = (mins + maxs) * 0.5
+        size = maxs - mins
+        max_axis = float(np.max(size))
+        scale = 1.4 / max_axis if max_axis > 1e-9 else 1.0
+        preview_points = (world_points - center[None, :]) * scale
+
+        eye = np.asarray([0.0, 0.35, 1.6], dtype=np.float64)
+        target = np.asarray([0.0, 0.0, 0.0], dtype=np.float64)
+        up_hint = np.asarray([0.0, 1.0, 0.0], dtype=np.float64)
+
+        forward = target - eye
+        forward /= max(float(np.linalg.norm(forward)), 1e-9)
+        right = np.cross(forward, up_hint)
+        right /= max(float(np.linalg.norm(right)), 1e-9)
+        up = np.cross(right, forward)
+
+        relative = preview_points - eye[None, :]
+        camera_x = relative @ right
+        camera_y = relative @ up
+        depth = relative @ forward
+        visible = depth > 0.05
+        if not np.any(visible):
+            return None
+
+        camera_x = camera_x[visible]
+        camera_y = camera_y[visible]
+        depth = depth[visible]
+
+        focal = (float(height) * 0.5) / np.tan(np.deg2rad(45.0) * 0.5)
+        px = np.rint((float(width) * 0.5) + ((camera_x / depth) * focal)).astype(np.int32)
+        py = np.rint((float(height) * 0.5) - ((camera_y / depth) * focal)).astype(np.int32)
+
+        diameter = np.clip((0.026 * focal) / depth, 4.0, 18.0)
+        radius = np.maximum(2, np.rint(diameter * 0.5).astype(np.int32))
+        return px, py, depth, radius, visible

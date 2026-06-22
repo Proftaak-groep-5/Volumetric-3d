@@ -13,11 +13,6 @@ Current scope in this repository:
 - support a one-shot `--test-capture` mode for bring-up on a NUC
 - support no-camera operation with optional synthetic color/depth frames
 
-Not implemented in this pass:
-
-- WebRTC
-- auth
-- cloud/fleet features
 
 ## Stable vs placeholder
 
@@ -36,7 +31,6 @@ Currently still placeholder / intentionally temporary:
 - browser preview transport is JPEG-over-WebSocket, not WebRTC
 - preview publisher is behind `IPreviewPublisher`, but only the JPEG implementation exists
 - `/stats` contains throughput and frame counters, but not true CPU/memory instrumentation
-- point cloud browser rendering and WebRTC signaling are not implemented
 
 ## 1. Windows build requirements
 

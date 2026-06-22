@@ -1,7 +1,9 @@
 import sys
 from pathlib import Path
+import tempfile
 import unittest
 
+import cv2
 import numpy as np
 
 # Ensure the backend app package is importable when running tests from repo root.
@@ -107,6 +109,64 @@ class VolumetricCaptureUtilsTests(unittest.TestCase):
                 f"before={points.shape[0]}",
                 f"after={fused_points.shape[0]}",
                 "voxel_size=0.01m",
+            )
+
+    def test_preview_projection_preserves_depth(self) -> None:
+        # Preview PNGs should use a perspective projection, not the old flat
+        # top-down XY scatter. Points at different Z depths should retain
+        # different camera depths and point sizes.
+        points = np.array(
+            [
+                [0.0, 0.0, -0.25],
+                [0.0, 0.0, 0.25],
+                [0.2, 0.1, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        try:
+            projected = VolumetricCaptureService._project_preview_points(points, width=1200, height=900)
+            self.assertIsNotNone(projected)
+            assert projected is not None
+            _, _, depth, radius, visible = projected
+            self.assertEqual(int(np.count_nonzero(visible)), points.shape[0])
+            self.assertGreater(float(np.ptp(depth)), 0.01)
+            self.assertGreaterEqual(int(np.ptp(radius)), 1)
+        except Exception as exc:
+            self._report("preview_projection_depth", False, f"unexpected error: {exc}")
+            raise
+        else:
+            self._report(
+                "preview_projection_depth",
+                True,
+                "check=perspective preview preserves depth",
+                f"depth_span={float(np.ptp(depth)):.3f}",
+                f"radius_span={int(np.ptp(radius))}",
+            )
+
+    def test_write_preview_outputs_nonblank_image(self) -> None:
+        # The email attachment preview should render a useful 3D image for a
+        # small synthetic cube-like point set.
+        grid = np.linspace(-0.2, 0.2, 8)
+        points = np.array([[x, y, z] for x in grid for y in grid for z in grid], dtype=np.float64)
+        colors = np.full((points.shape[0], 3), [70, 160, 230], dtype=np.uint8)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                preview_path = Path(temp_dir) / "preview.png"
+                VolumetricCaptureService._write_preview(preview_path, points, colors)
+                image = cv2.imread(str(preview_path))
+                self.assertIsNotNone(image)
+                assert image is not None
+                self.assertEqual(image.shape[:2], (900, 1200))
+                self.assertGreater(int(np.count_nonzero(image != 18)), 1000)
+        except Exception as exc:
+            self._report("write_preview_nonblank", False, f"unexpected error: {exc}")
+            raise
+        else:
+            self._report(
+                "write_preview_nonblank",
+                True,
+                "check=preview image contains rendered 3D splats",
+                "size=1200x900",
             )
 
     def test_camera_to_world_inverts_transform(self) -> None:
