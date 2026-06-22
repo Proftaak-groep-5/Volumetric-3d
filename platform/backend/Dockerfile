@@ -18,7 +18,7 @@ ENV PYTHONUNBUFFERED=1
 
 ENV BACKEND_PORT=8000
 
-WORKDIR /app
+WORKDIR /backend
 
 # Create a non-privileged user that the app will run under.
 # See https://docs.docker.com/go/dockerfile-user-best-practices/

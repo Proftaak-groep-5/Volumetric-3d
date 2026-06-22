@@ -1,16 +1,14 @@
-import sys, os
 import uuid
 from typing import List
 
 from fastapi import APIRouter, HTTPException
 
-from platform.backend.events.publisher import publish_event
-from ...events.event_bus import BaseEvent
-
-from ...core.deps import DbSession
-from ...schemas.museum import MuseumRead, MuseumCreate
-from ...services import museum as museum_service
-from ...services import recording as recording_service
+from ...contracts.museum_contract import CreateMuseumContract
+from platform.backend.events.publisher import publish_museum_event
+from app.core.deps import DbSession
+from app.schemas.museum import MuseumRead
+from app.services import museum as museum_service
+from app.services import recording as recording_service
 
 
 
@@ -46,9 +44,13 @@ async def get_all_museums(
 
 # NEW ENDPOINT => RABBITMQ EVENT
 @router.post("/createMuseum")
-def create_museum(data: dict):
-    publish_event(data)
-    return {"status", "event sent"}
+async def create_museum(museum: dict):
+    validated = CreateMuseumContract(**museum)
+
+    publish_museum_event(validated.model_dump())
+
+    return {"status": "event_sent"}
+
 
 
 

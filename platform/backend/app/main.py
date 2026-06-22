@@ -3,14 +3,15 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .core.database import init_db
 from .api.endpoints.user import router as user_router
 from .api.endpoints.museums import router as museum_router
 from .api.endpoints.recording import router as recording_router
+from .core.database import schedule_init_db
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    await schedule_init_db()
     yield
 
 app = FastAPI(lifespan=lifespan)

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-class MuseumCreatedEvent(BaseModel):
+class museum_created(BaseModel):
     museumid: str
     name: str
     owner: str

@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
     pass
 
 #import models to register them with SQLAlchemy
-from ..models import user
+from ..models import user, museum, recording
 
 # create tables using the async engine's run_sync (do not run on import in production)
 async def init_db():
@@ -31,7 +31,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
 
 # optionally expose a helper to initialize DB (call from FastAPI startup)
-def schedule_init_db():
+async def schedule_init_db():
     task = asyncio.create_task(init_db())
     return task
 

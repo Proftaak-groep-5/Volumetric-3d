@@ -41,12 +41,15 @@ services:
       restart: unless-stopped
 
   rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:3.12-management-alpine
     container_name: rabbitmq
     restart: unless-stopped
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5672:5672"      # AMQP port
+      - "15672:15672"    # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
 
   backend:
     build:
@@ -59,6 +62,21 @@ services:
       - "8000:8000"
     depends_on:
       postgres:
+        condition: service_started
+
+  backend-consumer:
+    build:
+      context: platform/backend
+      dockerfile: consumer.Dockerfile
+    container_name: backend-consumer
+    restart: unless-stopped
+    env_file:
+      - platform/.env
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_started
+      rabbitmq:
         condition: service_started
 
   frontend:
@@ -84,6 +102,5 @@ services:
     ports:
       - "8080:80"
 volumes:
-  postgres_data:
+  postgres-data:
     driver: local
-
