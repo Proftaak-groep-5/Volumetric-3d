@@ -256,8 +256,8 @@ int App::run(int argc, char **argv) {
     synthetic_->start([this] { return syntheticSourceEnabled(); });
 
     const auto ip = net::firstReachableIpv4();
-    log::get()->info("event=service urls root=http://{}:{}/ health=http://{}:{}/health depth_ws=ws://{}:{}/ws/depth", ip, config_.httpPort, ip,
-                     config_.httpPort, ip, config_.httpPort);
+    log::get()->info("event=service urls root=http://{}:{}/ health=http://{}:{}/health depth_ws=ws://{}:{}/ws/depth logs_ws=ws://{}:{}/ws/logs", ip,
+                     config_.httpPort, ip, config_.httpPort, ip, config_.httpPort, ip, config_.httpPort);
 
     while(!stopRequested_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -579,6 +579,7 @@ nlohmann::json App::streamsJson() const {
         { "color_preview_url", baseWs + "/ws/preview/color" },
         { "depth_preview_url", baseWs + "/ws/preview/depth" },
         { "depth_binary_ws_url", baseWs + "/ws/depth" },
+        { "log_ws_url", baseWs + "/ws/logs" },
         { "depth_snapshot_url", baseHttp + "/snapshot/depth.png" },
         { "depth_binary_snapshot_url", baseHttp + "/snapshot/depth.bin" },
         { "color_snapshot_url", baseHttp + "/snapshot/color.jpg" },
@@ -612,6 +613,7 @@ nlohmann::json App::discoveryJson() const {
               { "depth_ws", "/ws/depth" },
               { "color_preview_ws", "/ws/preview/color" },
               { "depth_preview_ws", "/ws/preview/depth" },
+              { "log_ws", "/ws/logs" },
           } },
         { "version", FEMTOBOLTNUC_VERSION },
         { "health_state", camera_->connected() ? "ready" : "degraded" },

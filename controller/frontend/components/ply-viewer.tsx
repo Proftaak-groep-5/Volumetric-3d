@@ -56,7 +56,7 @@ export function PlyViewer({ src, className, onError }: Readonly<PlyViewerProps>)
 
         resize();
 
-        if ("ResizeObserver" in window) {
+        if (typeof ResizeObserver !== "undefined") {
             resizeObserver = new ResizeObserver(resize);
             resizeObserver.observe(container);
         } else {

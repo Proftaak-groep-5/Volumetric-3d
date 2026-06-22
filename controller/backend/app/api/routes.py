@@ -370,6 +370,7 @@ def list_cameras(camera_manager: Annotated[CameraStreamManager, Depends(get_came
                 connected=bool(item["connected"]),
                 stream_url=f"/api/stream/{camera_id}.mjpg",
                 snapshot_url=f"/api/frame/{camera_id}.jpg",
+                log_ws_url=str(item["log_ws_url"]) if item.get("log_ws_url") else None,
             )
         )
 
