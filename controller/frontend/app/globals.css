@@ -281,6 +281,180 @@ button.secondary {
     font-family: "Space Grotesk", "Segoe UI", sans-serif;
 }
 
+.dashboard-shell {
+    width: min(1500px, 100% - 2rem);
+    margin: 1.2rem auto 2.5rem;
+    display: grid;
+    gap: 1rem;
+}
+
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--surface);
+    backdrop-filter: blur(10px);
+}
+
+.dashboard-header h1 {
+    margin: 0.25rem 0 0.3rem;
+    font-size: clamp(1.45rem, 2vw, 2.2rem);
+}
+
+.dashboard-header p {
+    margin: 0;
+    color: var(--muted);
+}
+
+.dashboard-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: var(--accent-2);
+    color: #211705;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.dashboard-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.6rem;
+}
+
+.dashboard-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+}
+
+.dashboard-stat {
+    min-height: 5rem;
+    padding: 0.8rem 0.9rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-strong);
+}
+
+.dashboard-stat span {
+    display: block;
+    color: var(--muted);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.dashboard-stat strong {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: 1.7rem;
+}
+
+.log-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 0.85rem;
+}
+
+.log-camera-card {
+    min-height: 26rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: rgba(6, 12, 15, 0.9);
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto 1fr;
+}
+
+.log-camera-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 0.85rem;
+    border-bottom: 1px solid var(--line);
+    background: rgba(17, 29, 35, 0.86);
+}
+
+.log-camera-header h2 {
+    margin: 0;
+    font-size: 1rem;
+    overflow-wrap: anywhere;
+}
+
+.log-camera-header p {
+    margin: 0.2rem 0 0;
+    color: var(--muted);
+    font-size: 0.84rem;
+}
+
+.log-state {
+    flex: 0 0 auto;
+    min-width: 6.5rem;
+    padding: 0.28rem 0.48rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+    text-align: center;
+    font-size: 0.76rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.log-state.live {
+    color: #062021;
+    background: var(--accent);
+    border-color: transparent;
+}
+
+.log-state.error,
+.log-state.disconnected {
+    color: var(--error);
+    background: rgba(255, 138, 122, 0.12);
+}
+
+.log-stream {
+    height: 24rem;
+    overflow: auto;
+    padding: 0.65rem;
+    font-family: "Consolas", "Cascadia Code", monospace;
+    font-size: 0.79rem;
+    line-height: 1.35;
+}
+
+.log-placeholder {
+    margin: 0;
+    color: var(--muted);
+    font-family: "Segoe UI", "Trebuchet MS", Tahoma, sans-serif;
+}
+
+.log-entry {
+    display: grid;
+    grid-template-columns: 5.2rem minmax(0, 1fr);
+    gap: 0.65rem;
+    padding: 0.18rem 0;
+    border-bottom: 1px solid rgba(159, 192, 195, 0.08);
+}
+
+.log-entry time {
+    color: var(--accent-2);
+    white-space: nowrap;
+}
+
+.log-entry code {
+    color: #d2ecee;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .demo-hero {
     display: flex;
     justify-content: space-between;
@@ -496,9 +670,28 @@ button.secondary {
         margin-top: 1rem;
     }
 
+    .dashboard-shell {
+        width: min(1500px, 100% - 1rem);
+        margin-top: 0.8rem;
+    }
+
     .demo-hero,
-    .demo-action {
+    .demo-action,
+    .dashboard-header {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .dashboard-actions {
+        justify-content: flex-start;
+    }
+
+    .log-dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .log-entry {
+        grid-template-columns: 1fr;
+        gap: 0.15rem;
     }
 }

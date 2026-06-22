@@ -258,6 +258,7 @@ If the camera does not connect or frames are not captured within the timeout, th
 - `WS /ws/preview/color`
 - `WS /ws/preview/depth`
 - `WS /ws/depth`
+- `WS /ws/logs`
 
 ## 7. Preview behavior
 

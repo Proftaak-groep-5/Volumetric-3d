@@ -299,6 +299,9 @@ export default function HomePage() {
                 <h1>Volumetric Femto Controller</h1>
                 <p>Live preview from all connected Femto Bolt cameras, plus click-to-triangulate 3D points from calibration.</p>
                 <div className="hero-actions">
+                    <Link className="button-link secondary" href="/dashboard">
+                        Open Log Dashboard
+                    </Link>
                     <Link className="button-link" href="/demo">
                         Launch Demo Mode
                     </Link>

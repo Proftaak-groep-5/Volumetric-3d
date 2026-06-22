@@ -35,11 +35,13 @@ struct HttpServer::Impl {
     std::thread serverThread;
     std::thread colorDispatchThread;
     std::mutex wsMutex;
+    std::mutex logWsMutex;
     std::mutex colorDispatchMutex;
     std::condition_variable colorDispatchCv;
     std::unordered_set<crow::websocket::connection *> colorClients;
     std::unordered_set<crow::websocket::connection *> depthClients;
     std::unordered_set<crow::websocket::connection *> depthBinaryClients;
+    std::unordered_set<crow::websocket::connection *> logClients;
     std::shared_ptr<const std::vector<uint8_t>> pendingColorFrame;
     uint64_t pendingColorVersion = 0;
     uint64_t sentColorVersion = 0;
@@ -55,6 +57,7 @@ HttpServer::~HttpServer() {
 void HttpServer::start(Callbacks callbacks) {
     callbacks_ = std::move(callbacks);
     auto &app = impl_->app;
+    log::setLineCallback([this](std::string line) { publishLogLine(line); });
     log::get()->info("event=http_server state=starting bind={} port={}", config_.bindAddress, config_.httpPort);
 
     CROW_ROUTE(app, "/")([this] {
@@ -187,6 +190,33 @@ void HttpServer::start(Callbacks callbacks) {
             log::get()->info("event=ws_client state=disconnected stream=depth_binary clients={}", impl_->depthBinaryClients.size());
         });
 
+    CROW_WEBSOCKET_ROUTE(app, "/ws/logs")
+        .onopen([this](crow::websocket::connection &conn) {
+            std::size_t clients = 0;
+            {
+                std::scoped_lock lock(impl_->logWsMutex);
+                impl_->logClients.insert(&conn);
+                clients = impl_->logClients.size();
+            }
+            if(auto line = log::latestLine()) {
+                try {
+                    conn.send_text(*line);
+                }
+                catch(...) {
+                }
+            }
+            log::get()->info("event=ws_client state=connected stream=logs clients={}", clients);
+        })
+        .onclose([this](crow::websocket::connection &conn, const std::string &) {
+            std::size_t clients = 0;
+            {
+                std::scoped_lock lock(impl_->logWsMutex);
+                impl_->logClients.erase(&conn);
+                clients = impl_->logClients.size();
+            }
+            log::get()->info("event=ws_client state=disconnected stream=logs clients={}", clients);
+        });
+
     impl_->stopRequested = false;
     impl_->colorDispatchThread = std::thread([this] {
         try {
@@ -243,6 +273,7 @@ void HttpServer::start(Callbacks callbacks) {
 }
 
 void HttpServer::stop() {
+    log::setLineCallback({});
     {
         std::scoped_lock lock(impl_->colorDispatchMutex);
         impl_->stopRequested = true;
@@ -256,6 +287,20 @@ void HttpServer::stop() {
         impl_->serverThread.join();
     }
     log::get()->info("event=http_server state=stopped");
+}
+
+void HttpServer::publishLogLine(const std::string &line) {
+    if(line.empty()) {
+        return;
+    }
+    std::scoped_lock lock(impl_->logWsMutex);
+    for(auto *client: impl_->logClients) {
+        try {
+            client->send_text(line);
+        }
+        catch(...) {
+        }
+    }
 }
 
 void HttpServer::publishColorPreview(std::shared_ptr<const std::vector<uint8_t>> jpeg) {

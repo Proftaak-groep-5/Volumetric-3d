@@ -16,6 +16,7 @@ class CameraInfo(BaseModel):
     connected: bool
     stream_url: str
     snapshot_url: str
+    log_ws_url: str | None = None
 
 
 class CameraListResponse(BaseModel):

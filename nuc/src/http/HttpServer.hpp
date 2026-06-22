@@ -53,6 +53,8 @@ public:
     void publishDepthBinary(std::shared_ptr<const std::vector<uint8_t>> packet);
 
 private:
+    void publishLogLine(const std::string &line);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
     Config config_;

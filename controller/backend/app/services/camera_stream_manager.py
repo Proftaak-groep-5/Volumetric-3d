@@ -594,10 +594,13 @@ class CameraStreamManager:
             return time.time()
         return timestamp_value
 
-    def camera_details(self) -> list[dict[str, str | int | bool]]:
-        details: list[dict[str, str | int | bool]] = []
+    def camera_details(self) -> list[dict[str, str | int | bool | None]]:
+        details: list[dict[str, str | int | bool | None]] = []
         for camera in self._cameras:
             snapshot = self.get_snapshot(camera.camera_id)
+            log_ws_url = None
+            if isinstance(camera, NetworkApiCamera):
+                log_ws_url = camera.base_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + "/ws/logs"
             details.append(
                 {
                     "camera_id": camera.camera_id,
@@ -608,6 +611,7 @@ class CameraStreamManager:
                     "height": snapshot.height if snapshot else self._color_height,
                     "fps": self._fps,
                     "connected": True,
+                    "log_ws_url": log_ws_url,
                 }
             )
         return details
