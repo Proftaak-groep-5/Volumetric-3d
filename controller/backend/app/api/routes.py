@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import base64
-import json
 import asyncio
+import json
 import logging
 import os
+import smtplib
 import subprocess
 import threading
 import urllib.error
 import urllib.request
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from shutil import which
 from typing import Annotated
@@ -54,9 +58,6 @@ from app.services.volumetric_capture import VolumetricCaptureService
 LOGGER = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["controller"])
 
-POSTMARK_ENDPOINT = "https://api.postmarkapp.com/email"
-
-
 def _resolve_latest_capture_file(output_dir: Path) -> Path:
     candidates = sorted(
         output_dir.glob("*.ply"),
@@ -81,55 +82,42 @@ def _resolve_capture_file(output_dir: Path, file_name: str | None) -> Path:
     return file_path
 
 
-def _read_attachment(path: Path, content_type: str, name: str | None = None) -> dict[str, str]:
-    data = path.read_bytes()
-    return {
-        "Name": name or path.name,
-        "Content": base64.b64encode(data).decode("ascii"),
-        "ContentType": content_type,
-    }
-
-
-def _send_postmark_email(
+def _send_gmail(
     *,
-    token: str,
     sender: str,
+    app_password: str,
     recipient: str,
     subject: str,
     text_body: str,
-    attachments: list[dict[str, str]],
-    message_stream: str | None,
+    attachments: list[tuple[Path, str]],  # (path, mime_type)
 ) -> None:
-    payload = {
-        "From": sender,
-        "To": recipient,
-        "Subject": subject,
-        "TextBody": text_body,
-        "Attachments": attachments,
-    }
-    if message_stream:
-        payload["MessageStream"] = message_stream
+    msg = MIMEMultipart()
+    msg["From"] = sender
+    msg["To"] = recipient
+    msg["Subject"] = subject
+    msg.attach(MIMEText(text_body, "plain"))
 
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        POSTMARK_ENDPOINT,
-        data=body,
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "X-Postmark-Server-Token": token,
-        },
-        method="POST",
-    )
+    for path, mime_type in attachments:
+        maintype, subtype = mime_type.split("/", 1)
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(path.read_bytes())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=path.name)
+        msg.attach(part)
+
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            if response.status >= 400:
-                raise HTTPException(status_code=502, detail="Postmark email send failed")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise HTTPException(status_code=502, detail=f"Postmark email send failed: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise HTTPException(status_code=502, detail=f"Postmark email send failed: {exc}") from exc
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(sender, app_password)
+            server.sendmail(sender, recipient, msg.as_string())
+    except smtplib.SMTPAuthenticationError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Gmail authentication failed — check GMAIL_ADDRESS and GMAIL_APP_PASSWORD",
+        ) from exc
+    except smtplib.SMTPException as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to send email: {exc}") from exc
 
 
 def _notify_blender_update(request: Request, event: str, payload: dict[str, object]) -> None:
@@ -496,31 +484,29 @@ def create_volumetric_capture(
 
 @router.post("/demo/email-capture")
 def email_capture(payload: EmailCaptureRequest, request: Request) -> EmailCaptureResponse:
-    token = getattr(request.app.state, "postmark_server_token", None)
-    sender = getattr(request.app.state, "postmark_from", None)
-    message_stream = getattr(request.app.state, "postmark_message_stream", None)
+    gmail_address = getattr(request.app.state, "gmail_address", None) or os.environ.get("GMAIL_ADDRESS")
+    gmail_app_password = getattr(request.app.state, "gmail_app_password", None) or os.environ.get("GMAIL_APP_PASSWORD")
     output_dir = getattr(request.app.state, "capture_output_dir", None)
 
-    if not token or not sender:
-        raise HTTPException(status_code=500, detail="Postmark is not configured")
+    if not gmail_address or not gmail_app_password:
+        raise HTTPException(status_code=500, detail="Gmail is not configured (GMAIL_ADDRESS / GMAIL_APP_PASSWORD)")
     if output_dir is None:
         raise HTTPException(status_code=500, detail="Capture output directory is unavailable")
 
     capture_path = _resolve_capture_file(Path(output_dir), payload.capture_file_name)
     preview_path = capture_path.with_name(capture_path.stem + "_preview.png")
 
-    attachments = [_read_attachment(capture_path, "application/octet-stream")]
+    attachments: list[tuple[Path, str]] = [(capture_path, "application/octet-stream")]
     if preview_path.exists():
-        attachments.append(_read_attachment(preview_path, "image/png", name=f"{capture_path.stem}.png"))
+        attachments.append((preview_path, "image/png"))
 
-    _send_postmark_email(
-        token=token,
-        sender=sender,
+    _send_gmail(
+        sender=gmail_address,
+        app_password=gmail_app_password,
         recipient=payload.email,
         subject="Innovation insight 3D capture",
         text_body="Your 3D capture is ready. The point cloud and preview are attached.",
         attachments=attachments,
-        message_stream=message_stream,
     )
 
     return EmailCaptureResponse(accepted=True, message="Email queued")
