@@ -42,8 +42,8 @@ if(NUC_FETCH_DEPS)
     if(NOT ASIO_INCLUDE_DIR OR NOT EXISTS "${ASIO_INCLUDE_DIR}/asio.hpp")
         FetchContent_Declare(
             asio
-            GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
-            GIT_TAG asio-1-30-2
+            URL https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-30-2.tar.gz
+            URL_HASH SHA256=755bd7f85a4b269c67ae0ea254907c078d408cce8e1a352ad2ed664d233780e8
         )
         FetchContent_MakeAvailable(asio)
         set(ASIO_INCLUDE_DIR "${asio_SOURCE_DIR}/asio/include")
@@ -52,18 +52,18 @@ if(NUC_FETCH_DEPS)
 
     FetchContent_Declare(
         nlohmann_json
-        GIT_REPOSITORY https://github.com/nlohmann/json.git
-        GIT_TAG v3.11.3
+        URL https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.tar.gz
+        URL_HASH SHA256=0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406
     )
     FetchContent_Declare(
         spdlog
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.14.1
+        URL https://github.com/gabime/spdlog/archive/refs/tags/v1.14.1.tar.gz
+        URL_HASH SHA256=1586508029a7d0670dfcb2d97575dcdc242d3868a259742b69f100801ab4e16b
     )
     FetchContent_Declare(
         crow
-        GIT_REPOSITORY https://github.com/CrowCpp/Crow.git
-        GIT_TAG v1.2.1
+        URL https://github.com/CrowCpp/Crow/archive/refs/tags/v1.2.1.tar.gz
+        URL_HASH SHA256=552f2e447adf70ed4c667d6f82db53dfc70710b50431004ab1405f5b53f04c30
     )
     set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
     set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
@@ -71,8 +71,8 @@ if(NUC_FETCH_DEPS)
     set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
         zstd
-        GIT_REPOSITORY https://github.com/facebook/zstd.git
-        GIT_TAG v1.5.6
+        URL https://github.com/facebook/zstd/archive/refs/tags/v1.5.6.tar.gz
+        URL_HASH SHA256=30f35f71c1203369dc979ecde0400ffea93c27391bfd2ac5a9715d2173d92ff7
         SOURCE_SUBDIR build/cmake
     )
     FetchContent_MakeAvailable(nlohmann_json spdlog crow zstd)

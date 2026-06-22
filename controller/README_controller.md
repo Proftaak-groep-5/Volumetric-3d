@@ -8,10 +8,11 @@ This controller includes:
 ## Architecture
 
 - Backend: `controller/backend`
-  - Discover + start connected Femto Bolt cameras via existing `calibration.camera.femto_bolt`.
+  - Discover + start network API cameras only (LAN and localhost loopback).
   - Stream MJPEG preview for each camera.
   - Load calibration from `calib_out/final_calibration.json`.
   - Triangulate world-space point from multi-camera 2D observations.
+  - Serve capture outputs under `/captures`.
 
 - Frontend: `controller/frontend`
   - Poll camera list.
@@ -37,10 +38,15 @@ Backend defaults:
 
 Optional env vars:
 
+- `HOST`
+- `PORT`
 - `CALIBRATION_FILE`
+- `CALIBRATION_CONFIG_FILE`
 - `CORS_ALLOWED_ORIGINS` (comma separated)
 - `CAMERA_COLOR_WIDTH`
 - `CAMERA_COLOR_HEIGHT`
+- `CAMERA_DEPTH_WIDTH`
+- `CAMERA_DEPTH_HEIGHT`
 - `CAMERA_FPS`
 - `MAX_CAMERAS`
 - `CAMERA_USE_DEPTH`
@@ -52,6 +58,18 @@ Optional env vars:
 - `CAMERA_COLOR_BRIGHTNESS`
 - `VOLUMETRIC_CAPTURE_OUTPUT_DIR`
 - `CAPTURE_OUTPUT_URL_PREFIX`
+- `BLENDER_UPDATE_COMMAND`
+- `BLENDER_EXECUTABLE`
+- `NETWORK_CAMERA_ENABLED`
+- `NETWORK_CAMERA_SUBNET`
+- `NETWORK_CAMERA_IPS` (comma separated explicit hosts/IPs; default includes `127.0.0.1,localhost`)
+- `NETWORK_CAMERA_PORTS` (comma separated, default `8080`)
+- `NETWORK_CAMERA_TIMEOUT_MS`
+- `NETWORK_CAMERA_MAX_CAMERAS`
+- `NETWORK_CAMERA_MAX_WORKERS`
+- `POSTMARK_SERVER_TOKEN`
+- `POSTMARK_FROM`
+- `POSTMARK_MESSAGE_STREAM`
 
 ## Frontend Run
 
@@ -60,20 +78,31 @@ From repository root:
 ```powershell
 cd controller/frontend
 npm install
-copy .env.local.example .env.local
 npm run dev
 ```
 
 Open: `http://localhost:3000`
 
+Optional frontend env:
+
+- `NEXT_PUBLIC_API_BASE_URL` (defaults to `http://localhost:8000`)
+
 ## API Endpoints
 
 - `GET /api/health`
+- `GET /api/calibration/status`
+- `POST /api/calibration/run`
+- `GET /api/recording/status`
+- `GET /api/recording/pick-output-dir`
+- `POST /api/recording/start`
+- `POST /api/recording/stop`
 - `GET /api/cameras`
+- `POST /api/cameras/configure-network`
 - `GET /api/frame/{camera_id}.jpg`
 - `GET /api/stream/{camera_id}.mjpg`
 - `POST /api/volumetric-point`
 - `POST /api/volumetric-capture`
+- `POST /api/demo/email-capture`
 
 Request body for point creation:
 

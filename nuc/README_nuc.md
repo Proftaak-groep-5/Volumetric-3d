@@ -13,11 +13,6 @@ Current scope in this repository:
 - support a one-shot `--test-capture` mode for bring-up on a NUC
 - support no-camera operation with optional synthetic color/depth frames
 
-Not implemented in this pass:
-
-- WebRTC
-- auth
-- cloud/fleet features
 
 ## Stable vs placeholder
 
@@ -36,11 +31,10 @@ Currently still placeholder / intentionally temporary:
 - browser preview transport is JPEG-over-WebSocket, not WebRTC
 - preview publisher is behind `IPreviewPublisher`, but only the JPEG implementation exists
 - `/stats` contains throughput and frame counters, but not true CPU/memory instrumentation
-- point cloud browser rendering and WebRTC signaling are not implemented
 
 ## 1. Windows build requirements
 
-Required:
+Required for full functionality:
 
 - Windows 10/11 x64
 - Visual Studio 2022 with Desktop C++ workload
@@ -258,6 +252,7 @@ If the camera does not connect or frames are not captured within the timeout, th
 - `WS /ws/preview/color`
 - `WS /ws/preview/depth`
 - `WS /ws/depth`
+- `WS /ws/logs`
 
 ## 7. Preview behavior
 
@@ -332,7 +327,7 @@ Depth semantics:
 
 ## 9. JavaScript depth client example
 
-See [examples/depth_packet_client.js](/c:/Users/sam-d/Documents/Github/Volumetric-3d/nuc/examples/depth_packet_client.js).
+See [nuc/examples/depth_packet_client.js](nuc/examples/depth_packet_client.js).
 
 Minimal parser:
 
@@ -359,7 +354,7 @@ ws.onmessage = (event) => {
 
 ## 10. C++ depth client example
 
-See [examples/depth_packet_client.cpp](/c:/Users/sam-d/Documents/Github/Volumetric-3d/nuc/examples/depth_packet_client.cpp).
+See [nuc/examples/depth_packet_client.cpp](nuc/examples/depth_packet_client.cpp).
 
 That example assumes you already have one full websocket message in a `std::vector<uint8_t>`, then:
 
@@ -410,12 +405,3 @@ What is still intentionally not in scope here:
 - production installer/packager
 - multi-camera orchestration
 
-Known limitations:
-
-- I could not execute a full compile from this shell because no MSVC/Ninja toolchain is exposed here, even though `cmake` is installed.
-- I did not find a local GStreamer install root from this shell environment, so the improved error path for missing GStreamer is code-level, not runtime-verified here.
-- Browser preview is intentionally still JPEG-over-WebSocket for this phase.
-
-Implementation note:
-
-- color capture now accepts uncompressed RGB/BGR/BGRA/RGBA/YUYV/YUY2 and MJPEG camera frames

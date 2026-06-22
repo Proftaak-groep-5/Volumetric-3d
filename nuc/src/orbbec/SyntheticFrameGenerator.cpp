@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <ctime>
+#include <exception>
 
 namespace femto {
 namespace {
@@ -31,7 +32,24 @@ void SyntheticFrameGenerator::start(std::function<bool()> activeProvider) {
         return;
     }
     activeProvider_ = std::move(activeProvider);
-    worker_ = std::thread([this] { workerLoop(); });
+    worker_ = std::thread([this] {
+        while(running_) {
+            try {
+                workerLoop();
+            }
+            catch(const std::exception &ex) {
+                active_ = false;
+                log::get()->error("event=synthetic_source state=crashed error=\"{}\" action=retry", ex.what());
+            }
+            catch(...) {
+                active_ = false;
+                log::get()->error("event=synthetic_source state=crashed error=unknown action=retry");
+            }
+            if(running_) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+    });
 }
 
 void SyntheticFrameGenerator::stop() {

@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 
+from calibration.camera.network_api import NetworkCameraDiscoveryConfig
+
 REQUIRED_FACES: Tuple[str, ...] = ("front", "top", "left", "right", "back", "bottom")
 
 
@@ -39,6 +41,8 @@ class QualityConfig:
     max_rotation_std_deg: float = 3.5
     depth_distance_tolerance_m: float = 0.08
     depth_distance_tolerance_pct: float = 12.0
+    use_pnp_corners: bool = True
+    pnp_fallback_to_markers: bool = True
 
     def validate(self) -> None:
         if self.min_markers_per_frame < 1:
@@ -119,6 +123,7 @@ class CalibrationConfig:
     use_depth: bool = False
     camera_ids: Optional[List[str]] = None
     camera: CameraTuningConfig = field(default_factory=CameraTuningConfig)
+    network_camera: NetworkCameraDiscoveryConfig = field(default_factory=NetworkCameraDiscoveryConfig)
     quality: QualityConfig = field(default_factory=QualityConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
 
@@ -176,6 +181,10 @@ class CalibrationConfig:
         if not isinstance(camera_payload, Mapping):
             camera_payload = {}
 
+        network_camera_payload = payload.get("network_camera", {})
+        if not isinstance(network_camera_payload, Mapping):
+            network_camera_payload = {}
+
         debug_payload = payload.get("debug", {})
         if isinstance(debug_payload, bool):
             debug_payload = {"enabled": debug_payload}
@@ -214,6 +223,8 @@ class CalibrationConfig:
             depth_distance_tolerance_pct=float(
                 quality_payload.get("depth_distance_tolerance_pct", payload.get("depth_distance_tolerance_pct", 12.0))
             ),
+            use_pnp_corners=bool(quality_payload.get("use_pnp_corners", True)),
+            pnp_fallback_to_markers=bool(quality_payload.get("pnp_fallback_to_markers", True)),
         )
 
         debug = DebugConfig(
@@ -240,8 +251,8 @@ class CalibrationConfig:
                 cube_length=float(cube_payload["cube_length"]),
             ),
             face_ids={str(k): int(v) for k, v in face_payload.items()},
-            color_resolution=cls._parse_resolution(payload.get("color_res", "1920x1080")),
-            depth_resolution=cls._parse_resolution(payload.get("depth_res", "1024x1024")),
+            color_resolution=cls._parse_resolution(payload.get("color_res", "3840x2160")),
+            depth_resolution=cls._parse_resolution(payload.get("depth_res", "640x576")),
             fps=int(payload.get("fps", 30)),
             frame_count=int(payload.get("frame_count", 60)),
             warmup_frames=int(payload.get("warmup_frames", 5)),
@@ -250,6 +261,7 @@ class CalibrationConfig:
             use_depth=bool(payload.get("use_depth", False)),
             camera_ids=[str(x) for x in payload.get("camera_ids", [])] or None,
             camera=camera,
+            network_camera=NetworkCameraDiscoveryConfig.from_mapping(network_camera_payload),
             quality=quality,
             debug=debug,
         )
@@ -259,6 +271,7 @@ class CalibrationConfig:
     def validate(self) -> None:
         self.cube.validate()
         self.camera.validate()
+        self.network_camera.validate()
         self.quality.validate()
 
         if self.fps <= 0:
@@ -267,8 +280,8 @@ class CalibrationConfig:
             raise ValueError("frame_count must be > 0")
         if self.warmup_frames < 0:
             raise ValueError("warmup_frames must be >= 0")
-        if not (1 <= self.max_cameras <= 6):
-            raise ValueError("max_cameras must be between 1 and 6")
+        if self.max_cameras < 1:
+            raise ValueError("max_cameras must be >= 1")
         if self.world_origin != "cube_center":
             raise ValueError("Only world_origin='cube_center' is currently supported")
 
@@ -311,6 +324,7 @@ class CalibrationConfig:
             "use_depth": self.use_depth,
             "camera_ids": self.camera_ids,
             "camera": self.camera.to_dict(),
+            "network_camera": self.network_camera.to_dict(),
             "quality": {
                 "min_markers_per_frame": self.quality.min_markers_per_frame,
                 "min_valid_frames_per_camera": self.quality.min_valid_frames_per_camera,
@@ -323,6 +337,8 @@ class CalibrationConfig:
                 "max_rotation_std_deg": self.quality.max_rotation_std_deg,
                 "depth_distance_tolerance_m": self.quality.depth_distance_tolerance_m,
                 "depth_distance_tolerance_pct": self.quality.depth_distance_tolerance_pct,
+                "use_pnp_corners": self.quality.use_pnp_corners,
+                "pnp_fallback_to_markers": self.quality.pnp_fallback_to_markers,
             },
             "debug": {
                 "enabled": self.debug.enabled,

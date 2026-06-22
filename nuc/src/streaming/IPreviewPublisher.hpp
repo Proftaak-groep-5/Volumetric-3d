@@ -18,6 +18,7 @@ public:
     virtual void stop() = 0;
     virtual bool running() const = 0;
     virtual bool pushRgbFrame(const uint8_t *data, std::size_t bytes, uint64_t timestampUs) = 0;
+    virtual bool pushJpegFrame(std::shared_ptr<const std::vector<uint8_t>> jpeg, uint64_t timestampUs) = 0;
     virtual std::shared_ptr<const std::vector<uint8_t>> latestJpeg() const = 0;
     virtual void setFrameCallback(FrameCallback callback) = 0;
 };

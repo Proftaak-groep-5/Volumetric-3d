@@ -20,6 +20,7 @@ class OrbbecCamera {
 public:
     struct FrameEnvelope {
         std::vector<uint8_t> bytes;
+        std::shared_ptr<const std::vector<uint8_t>> jpegBytes;
         int width = 0;
         int height = 0;
         uint64_t timestampUs = 0;
@@ -95,6 +96,7 @@ private:
     std::chrono::steady_clock::time_point lastNoCameraLog_{};
     std::string lastError_;
     bool connected_ = false;
+    int consecutiveFrameTimeouts_ = 0;
 };
 
 }  // namespace femto

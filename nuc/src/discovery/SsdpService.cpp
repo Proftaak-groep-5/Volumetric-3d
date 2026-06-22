@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <sstream>
 
 namespace femto {
@@ -24,7 +25,22 @@ void SsdpService::start(std::function<nlohmann::json()> discoveryProvider) {
         return;
     }
     discoveryProvider_ = std::move(discoveryProvider);
-    worker_ = std::thread([this] { workerLoop(); });
+    worker_ = std::thread([this] {
+        while(running_) {
+            try {
+                workerLoop();
+            }
+            catch(const std::exception &ex) {
+                log::get()->error("event=ssdp state=crashed error=\"{}\" action=retry", ex.what());
+            }
+            catch(...) {
+                log::get()->error("event=ssdp state=crashed error=unknown action=retry");
+            }
+            if(running_) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+    });
 }
 
 void SsdpService::stop() {

@@ -36,6 +36,7 @@ private:
     void handleDepthFrame(const OrbbecCamera::DepthEnvelope &frame, const nlohmann::json &calibration);
     void configureRuntimeEnvironment() const;
     void logRuntimeDependencyHints() const;
+    void restartPreviewPipelines();
     bool syntheticSourceEnabled() const;
     std::optional<OrbbecCamera::DepthEnvelope> latestDepthFrameForSnapshots() const;
     nlohmann::json metadataJson() const;
