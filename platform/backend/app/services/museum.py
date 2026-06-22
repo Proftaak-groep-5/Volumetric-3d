@@ -19,7 +19,9 @@ async def create_museum(
         name: str,
         description: str
 ):
-    return await museum_crud.create_museum(db, name=name, description=description)
+    museum = await museum_crud.create_museum(db, name=name, description=description)
+
+    return museum
 
 async def get_museum_by_id(db, museumid):
     museum = await museum_crud.get_museum_by_id(db, museumid)

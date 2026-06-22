@@ -6,3 +6,5 @@ python-dotenv
 asyncpg
 pydantic
 pydantic[email]
+pika
+aio-pika

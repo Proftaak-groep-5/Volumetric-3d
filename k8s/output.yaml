@@ -1,0 +1,502 @@
+apiVersion: v1
+data:
+  BACKEND_PORT: "8000"
+  DATABASE_URL: postgresql+asyncpg://testuser:VolCap3D1234!@postgres:5432/testdb
+  DB_HOST: postgres
+  DB_NAME: testdb
+  DB_PASSWORD: VolCap3D1234!
+  DB_PORT: "5432"
+  DB_USERNAME: testuser
+kind: ConfigMap
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: backend-platform--env
+  name: platform--env
+  namespace: default
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: backend
+  name: backend
+  namespace: default
+spec:
+  ports:
+  - name: "8000"
+    port: 8000
+    targetPort: 8000
+  selector:
+    environment: dev
+    io.kompose.service: backend
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: falcosidekick
+  name: falcosidekick
+  namespace: default
+spec:
+  ports:
+  - name: "2801"
+    port: 2801
+    targetPort: 2801
+  selector:
+    environment: dev
+    io.kompose.service: falcosidekick
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: frontend
+  name: frontend
+  namespace: default
+spec:
+  ports:
+  - name: "3000"
+    port: 3000
+    targetPort: 3000
+  selector:
+    environment: dev
+    io.kompose.service: frontend
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: pgadmin
+  name: pgadmin
+  namespace: default
+spec:
+  ports:
+  - name: "8080"
+    port: 8080
+    targetPort: 80
+  selector:
+    environment: dev
+    io.kompose.service: pgadmin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: postgres
+  name: postgres
+  namespace: default
+spec:
+  ports:
+  - name: "5432"
+    port: 5432
+    targetPort: 5432
+  selector:
+    environment: dev
+    io.kompose.service: postgres
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: falco-claim1
+  name: falco-claim1
+  namespace: default
+spec:
+  accessModes:
+  - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: falco-claim2
+  name: falco-claim2
+  namespace: default
+spec:
+  accessModes:
+  - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: falco-claim3
+  name: falco-claim3
+  namespace: default
+spec:
+  accessModes:
+  - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: falco-claim5
+  name: falco-claim5
+  namespace: default
+spec:
+  accessModes:
+  - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: falco-claim6
+  name: falco-claim6
+  namespace: default
+spec:
+  accessModes:
+  - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: falco-claim7
+  name: falco-claim7
+  namespace: default
+spec:
+  accessModes:
+  - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    environment: dev
+    io.kompose.service: falco-claim8
+  name: falco-claim8
+  namespace: default
+spec:
+  accessModes:
+  - ReadOnlyMany
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: backend
+  name: backend
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      environment: dev
+      io.kompose.service: backend
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f compose.yml --out k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        environment: dev
+        io.kompose.service: backend
+    spec:
+      containers:
+      - envFrom:
+        - configMapRef:
+            name: platform--env
+        image: squidgy21/volumetric-3d-backend:1.0
+        name: backend
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: falco
+  name: falco
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      environment: dev
+      io.kompose.service: falco
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f compose.yml --out k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        environment: dev
+        io.kompose.service: falco
+    spec:
+      containers:
+      - env:
+        - name: FALCO_RULES_FILES
+          value: /etc/falco/rules.d/custom-rules.yaml
+        image: falcosecurity/falco:latest
+        name: falco
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - mountPath: /host/proc
+          name: falco-claim1
+          readOnly: true
+        - mountPath: /host/etc
+          name: falco-claim2
+          readOnly: true
+        - mountPath: /sys/kernel/tracing
+          name: falco-claim3
+          readOnly: true
+        - mountPath: /host/lib/modules
+          name: falco-claim5
+          readOnly: true
+        - mountPath: /host/boot
+          name: falco-claim6
+          readOnly: true
+        - mountPath: /host/usr
+          name: falco-claim7
+          readOnly: true
+        - mountPath: /etc/falco/rules.d
+          name: falco-claim8
+          readOnly: true
+      restartPolicy: Always
+      volumes:
+      - name: falco-claim1
+        persistentVolumeClaim:
+          claimName: falco-claim1
+          readOnly: true
+      - name: falco-claim2
+        persistentVolumeClaim:
+          claimName: falco-claim2
+          readOnly: true
+      - name: falco-claim3
+        persistentVolumeClaim:
+          claimName: falco-claim3
+          readOnly: true
+      - name: falco-claim5
+        persistentVolumeClaim:
+          claimName: falco-claim5
+          readOnly: true
+      - name: falco-claim6
+        persistentVolumeClaim:
+          claimName: falco-claim6
+          readOnly: true
+      - name: falco-claim7
+        persistentVolumeClaim:
+          claimName: falco-claim7
+          readOnly: true
+      - name: falco-claim8
+        persistentVolumeClaim:
+          claimName: falco-claim8
+          readOnly: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: falcosidekick
+  name: falcosidekick
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      environment: dev
+      io.kompose.service: falcosidekick
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f compose.yml --out k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        environment: dev
+        io.kompose.service: falcosidekick
+    spec:
+      containers:
+      - env:
+        - name: DISCORD_WEBHOOKURL
+          value: https://discord.com/api/webhooks/1506270977850343444/fgM_FNrCiQzZBNXpexVIYa-M-fRUwtIlHbMrd18ZsUZJRUQzCeo2hIuTVy9aHfoP_MUO
+        image: falcosecurity/falcosidekick:latest
+        name: falcosidekick
+        ports:
+        - containerPort: 2801
+          protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: frontend
+  name: frontend
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      environment: dev
+      io.kompose.service: frontend
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f compose.yml --out k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        environment: dev
+        io.kompose.service: frontend
+    spec:
+      containers:
+      - envFrom:
+        - configMapRef:
+            name: platform--env
+        image: squidgy21/volumetric-3d-frontend:1.0
+        name: frontend
+        ports:
+        - containerPort: 3000
+          protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: pgadmin
+  name: pgadmin
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      environment: dev
+      io.kompose.service: pgadmin
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f compose.yml --out k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        environment: dev
+        io.kompose.service: pgadmin
+    spec:
+      containers:
+      - env:
+        - name: PGADMIN_DEFAULT_EMAIL
+          value: john@doe.com
+        - name: PGADMIN_DEFAULT_PASSWORD
+          value: VolCap3D1234!
+        image: dpage/pgadmin4
+        name: pgadmin
+        ports:
+        - containerPort: 80
+          protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: kompose convert -f compose.yml --out k8s/
+    kompose.version: 1.38.0 (a8f5d1cbd)
+  labels:
+    environment: dev
+    io.kompose.service: postgres
+  name: postgres
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      environment: dev
+      io.kompose.service: postgres
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: kompose convert -f compose.yml --out k8s/
+        kompose.version: 1.38.0 (a8f5d1cbd)
+      labels:
+        environment: dev
+        io.kompose.service: postgres
+    spec:
+      containers:
+      - env:
+        - name: POSTGRES_DB
+          value: testdb
+        - name: POSTGRES_PASSWORD
+          value: VolCap3D1234!
+        - name: POSTGRES_USER
+          value: testuser
+        image: postgres:15
+        name: postgres-db
+        ports:
+        - containerPort: 5432
+          protocol: TCP
+      restartPolicy: Always
